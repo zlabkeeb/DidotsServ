@@ -103,6 +103,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/zlabkeeb/DidotsServ/main/ins
 
 ## ⚠️ Persyaratan
 
-- RAM minimum: **1 GB** (2 GB disarankan)
+- RAM minimum: **21 GB** (4 GB disarankan)
 - Storage minimum: **10 GB**
 - Koneksi internet aktif saat instalasi
