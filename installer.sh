@@ -1,0 +1,1574 @@
+#!/bin/bash
+
+# GenieACS Installer Script
+# Description: Interactive installer for GenieACS with Docker
+# Repository : https://github.com/zlabkeeb/DidotsServ
+
+# ============================================================
+# CONFIGURATION - GitHub Repository
+# ============================================================
+GITHUB_USER="zlabkeeb"
+GITHUB_REPO="DidotsServ"
+GITHUB_BRANCH="main"
+GITHUB_RAW_BASE="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}"
+DB_URL="${GITHUB_RAW_BASE}/db"
+
+INSTALLER_VERSION="5.5"
+
+# Detect system language
+LANG_CODE="${LANG:0:2}"
+
+# Language strings
+case $LANG_CODE in
+    id)
+        MSG_TITLE="Interactive Installer"
+        MSG_CHOOSE="Pilih menu"
+        MSG_BACK="Kembali"
+        MSG_EXIT="Keluar"
+        MSG_SUCCESS="SUKSES"
+        MSG_ERROR="ERROR"
+        MSG_WARNING="PERINGATAN"
+        MSG_INFO="INFO"
+        MSG_PRESS_ENTER="Tekan Enter untuk melanjutkan..."
+        MSG_INVALID_CHOICE="Pilihan tidak valid!"
+        MSG_THANK_YOU="Terima kasih telah menggunakan Installer!"
+        MSG_PROCESS_COMPLETE="Proses selesai!"
+        MSG_PROCESS_FAILED="Proses gagal! Silakan periksa error di atas."
+        
+        MENU_DOCKER="Docker"
+        MENU_GENIEACS="GenieACS"
+        MENU_PANEL="GenieACS Panel"
+        MENU_CUSTOMER_PORTAL="Customer Portal"
+        MENU_STATUS="Lihat Status"
+        MENU_EXIT="Keluar"
+        
+        SUBMENU_INSTALL_DOCKER="Install Docker dan Docker Compose"
+        SUBMENU_UNINSTALL_DOCKER="Uninstall Docker dan Docker Compose"
+        SUBMENU_INSTALL_GENIEACS="Install GenieACS"
+        SUBMENU_CONFIG_GENIEACS="Konfigurasi DB GenieACS"
+        SUBMENU_UNINSTALL_GENIEACS="Uninstall GenieACS"
+        SUBMENU_INSTALL_PANEL="Install GenieACS Panel"
+        SUBMENU_UNINSTALL_PANEL="Uninstall GenieACS Panel"
+        SUBMENU_INSTALL_CUSTOMER_PORTAL="Install Customer Portal"
+        SUBMENU_UNINSTALL_CUSTOMER_PORTAL="Uninstall Customer Portal"
+        ;;
+    *)
+        MSG_TITLE="Interactive Installer"
+        MSG_CHOOSE="Choose menu"
+        MSG_BACK="Back"
+        MSG_EXIT="Exit"
+        MSG_SUCCESS="SUCCESS"
+        MSG_ERROR="ERROR"
+        MSG_WARNING="WARNING"
+        MSG_INFO="INFO"
+        MSG_PRESS_ENTER="Press Enter to continue..."
+        MSG_INVALID_CHOICE="Invalid choice!"
+        MSG_THANK_YOU="Thank you for using Installer!"
+        MSG_PROCESS_COMPLETE="Process completed!"
+        MSG_PROCESS_FAILED="Process failed! Please check the error above."
+        
+        MENU_DOCKER="Docker"
+        MENU_GENIEACS="GenieACS"
+        MENU_PANEL="GenieACS Panel"
+        MENU_CUSTOMER_PORTAL="Customer Portal"
+        MENU_STATUS="View Status"
+        MENU_EXIT="Exit"
+        
+        SUBMENU_INSTALL_DOCKER="Install Docker and Docker Compose"
+        SUBMENU_UNINSTALL_DOCKER="Uninstall Docker and Docker Compose"
+        SUBMENU_INSTALL_GENIEACS="Install GenieACS"
+        SUBMENU_CONFIG_GENIEACS="Configure GenieACS Database"
+        SUBMENU_UNINSTALL_GENIEACS="Uninstall GenieACS"
+        SUBMENU_INSTALL_PANEL="Install GenieACS Panel"
+        SUBMENU_UNINSTALL_PANEL="Uninstall GenieACS Panel"
+        SUBMENU_INSTALL_CUSTOMER_PORTAL="Install Customer Portal"
+        SUBMENU_UNINSTALL_CUSTOMER_PORTAL="Uninstall Customer Portal"
+        ;;
+esac
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+print_success() { echo -e "${GREEN}[${MSG_SUCCESS}]${NC} $1"; }
+print_error()   { echo -e "${RED}[${MSG_ERROR}]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[${MSG_WARNING}]${NC} $1"; }
+print_info()    { echo -e "${BLUE}[${MSG_INFO}]${NC} $1"; }
+
+get_server_ip() { hostname -I | awk '{print $1}'; }
+
+detect_architecture() {
+    case $(uname -m) in
+        x86_64)        echo "amd64";;
+        aarch64|arm64) echo "arm64";;
+        armv7l)        echo "armhf";;
+        *)             echo "unknown";;
+    esac
+}
+
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+        OS_VERSION=$VERSION_ID
+        OS_CODENAME=$VERSION_CODENAME
+        OS_PRETTY_NAME=$PRETTY_NAME
+
+        if grep -qi microsoft /proc/version 2>/dev/null || grep -qi wsl /proc/version 2>/dev/null; then
+            IS_WSL=true
+        else
+            IS_WSL=false
+        fi
+
+        [ -z "$OS_CODENAME" ] && OS_CODENAME=$(lsb_release -cs 2>/dev/null || echo "")
+
+        if [ "$OS" = "debian" ] || [ "$OS" = "armbian" ] || [ "$OS" = "raspbian" ]; then
+            DOCKER_BASE_OS="debian"
+            [ -z "$OS_CODENAME" ] && OS_CODENAME="bookworm"
+        elif [ "$OS" = "ubuntu" ] || [ "$OS" = "pop" ] || [ "$OS" = "linuxmint" ]; then
+            DOCKER_BASE_OS="ubuntu"
+            [ -z "$OS_CODENAME" ] && OS_CODENAME="jammy"
+        else
+            if [ -f /etc/debian_version ]; then
+                DOCKER_BASE_OS="debian"
+                [ -z "$OS_CODENAME" ] && OS_CODENAME="bookworm"
+            else
+                DOCKER_BASE_OS="ubuntu"
+                [ -z "$OS_CODENAME" ] && OS_CODENAME="jammy"
+            fi
+        fi
+
+        echo "$OS:$OS_VERSION:$OS_CODENAME:$IS_WSL:$DOCKER_BASE_OS"
+    else
+        echo "unknown:unknown:unknown:false:ubuntu"
+    fi
+}
+
+wait_for_dpkg_lock() {
+    local max_wait=300
+    local waited=0
+
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
+        [ $waited -eq 0 ] && { [ "$LANG_CODE" = "id" ] && print_warning "Menunggu proses apt lain selesai..." || print_warning "Waiting for other apt processes to finish..."; }
+        sleep 2
+        waited=$((waited + 2))
+        [ $waited -ge $max_wait ] && { [ "$LANG_CODE" = "id" ] && print_error "Timeout menunggu dpkg lock" || print_error "Timeout waiting for dpkg lock"; return 1; }
+        [ $((waited % 10)) -eq 0 ] && { [ "$LANG_CODE" = "id" ] && echo "  Menunggu ${waited} detik..." || echo "  Waiting ${waited} seconds..."; }
+    done
+
+    [ $waited -gt 0 ] && { [ "$LANG_CODE" = "id" ] && print_success "Proses apt lain selesai" || print_success "Other apt processes finished"; sleep 2; }
+    return 0
+}
+
+kill_apt_processes() {
+    if [ "$LANG_CODE" = "id" ]; then
+        print_warning "Mendeteksi proses apt yang berjalan..."
+        read -p "Paksa hentikan proses apt? (y/n): " confirm
+    else
+        print_warning "Detected running apt processes..."
+        read -p "Force kill apt processes? (y/n): " confirm
+    fi
+
+    if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+        [ "$LANG_CODE" = "id" ] && print_info "Menghentikan proses apt..." || print_info "Killing apt processes..."
+        killall apt-get 2>/dev/null; killall apt 2>/dev/null; killall dpkg 2>/dev/null
+        rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null
+        dpkg --configure -a 2>/dev/null
+        sleep 2
+        [ "$LANG_CODE" = "id" ] && print_success "Proses apt dihentikan" || print_success "Apt processes killed"
+        return 0
+    else
+        return 1
+    fi
+}
+
+safe_apt_get() {
+    local cmd="$@"
+    local max_retries=3
+    local retry=0
+
+    while [ $retry -lt $max_retries ]; do
+        if wait_for_dpkg_lock; then
+            eval "$cmd" && return 0
+            retry=$((retry + 1))
+            [ $retry -lt $max_retries ] && { [ "$LANG_CODE" = "id" ] && print_warning "Percobaan ke-$retry gagal, mencoba lagi..." || print_warning "Attempt $retry failed, retrying..."; sleep 3; }
+        else
+            kill_apt_processes || return 1
+        fi
+    done
+    return 1
+}
+
+check_ufw_status() {
+    if command -v ufw &> /dev/null; then
+        ufw status | grep -q "Status: active" && echo "active" || echo "inactive"
+    else
+        echo "not_installed"
+    fi
+}
+
+configure_firewall() {
+    local ports=("$@")
+    local ufw_status=$(check_ufw_status)
+
+    echo ""
+    [ "$LANG_CODE" = "id" ] && print_info "Memeriksa status firewall..." || print_info "Checking firewall status..."
+
+    case $ufw_status in
+        active)
+            if [ "$LANG_CODE" = "id" ]; then
+                print_warning "UFW Firewall terdeteksi AKTIF"
+                print_info "Port yang perlu dibuka: ${ports[*]}"
+                read -p "Buka port secara otomatis? (y/n): " confirm
+            else
+                print_warning "UFW Firewall detected ACTIVE"
+                print_info "Ports that need to be opened: ${ports[*]}"
+                read -p "Open ports automatically? (y/n): " confirm
+            fi
+
+            if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+                [ "$LANG_CODE" = "id" ] && print_info "Membuka port di firewall..." || print_info "Opening ports in firewall..."
+                for port in "${ports[@]}"; do
+                    ufw allow "$port" &> /dev/null \
+                        && { [ "$LANG_CODE" = "id" ] && print_success "Port $port berhasil dibuka" || print_success "Port $port opened successfully"; } \
+                        || { [ "$LANG_CODE" = "id" ] && print_error "Gagal membuka port $port" || print_error "Failed to open port $port"; }
+                done
+                [ "$LANG_CODE" = "id" ] && print_info "Reload UFW..." || print_info "Reloading UFW..."
+                ufw reload &> /dev/null
+                [ "$LANG_CODE" = "id" ] && print_success "Konfigurasi firewall selesai!" || print_success "Firewall configuration completed!"
+            else
+                [ "$LANG_CODE" = "id" ] && print_warning "Port tidak dibuka otomatis" || print_warning "Ports not opened automatically"
+                [ "$LANG_CODE" = "id" ] && print_info "Anda perlu membuka port berikut secara manual:" || print_info "You need to manually open the following ports:"
+                for port in "${ports[@]}"; do echo "  sudo ufw allow $port"; done
+            fi
+            ;;
+        inactive)
+            [ "$LANG_CODE" = "id" ] && print_info "UFW Firewall: Nonaktif - Melanjutkan instalasi..." || print_info "UFW Firewall: Inactive - Continuing installation..."
+            ;;
+        not_installed)
+            [ "$LANG_CODE" = "id" ] && print_info "UFW tidak terinstall - Melanjutkan instalasi..." || print_info "UFW not installed - Continuing installation..."
+            ;;
+    esac
+    echo ""
+}
+
+show_firewall_status() {
+    local ufw_status=$(check_ufw_status)
+    case $ufw_status in
+        active)
+            [ "$LANG_CODE" = "id" ] && print_success "UFW Firewall: Aktif" || print_success "UFW Firewall: Active"
+            echo ""
+            ufw status numbered
+            ;;
+        inactive)
+            [ "$LANG_CODE" = "id" ] && print_warning "UFW Firewall: Nonaktif" || print_warning "UFW Firewall: Inactive"
+            ;;
+        not_installed)
+            [ "$LANG_CODE" = "id" ] && print_info "UFW Firewall: Tidak Terinstall" || print_info "UFW Firewall: Not Installed"
+            ;;
+    esac
+}
+
+# ============================================================
+# Animation and loading functions
+# ============================================================
+show_spinner() {
+    local pid=$1
+    local message=$2
+    local delay=0.1
+    local spinstr='|/-\'
+
+    while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
+        local temp=${spinstr#?}
+        printf " [%c] %s" "$spinstr" "$message"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"
+    done
+    printf "    \b\b\b\b"
+}
+
+show_progress_bar() {
+    local duration=$1
+    local message=$2
+    local bar_length=40
+
+    printf "\n%s\n" "$message"
+    for ((i=0; i<=duration; i++)); do
+        local progress=$((i * bar_length / duration))
+        local percentage=$((i * 100 / duration))
+        printf "\r["
+        for ((j=0; j<progress; j++)); do printf "="; done
+        if [ $i -lt $duration ]; then
+            printf ">"
+            for ((j=progress+1; j<bar_length; j++)); do printf " "; done
+        else
+            for ((j=progress; j<bar_length; j++)); do printf "="; done
+        fi
+        printf "] %d%%" $percentage
+        sleep 0.1
+    done
+    printf "\n\n"
+}
+
+animated_text() {
+    local text="$1"
+    local delay="${2:-0.03}"
+    for ((i=0; i<${#text}; i++)); do
+        printf "${text:$i:1}"
+        sleep "$delay"
+    done
+    printf "\n"
+}
+
+show_installation_header() {
+    clear
+    echo -e "${BLUE}"
+    echo "╔══════════════════════════════════════════════════════════╗"
+    echo "║                    GenieACS Installer                    ║"
+    echo "╚══════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo ""
+}
+
+loading_animation() {
+    local message="$1"
+    local duration="${2:-3}"
+    printf "%s " "$message"
+    for ((i=0; i<duration; i++)); do printf "."; sleep 1; done
+    printf " ✓\n"
+}
+
+show_system_info() {
+    echo ""
+    echo "========================================================="
+    [ "$LANG_CODE" = "id" ] && echo "           INFORMASI SISTEM" || echo "           SYSTEM INFORMATION"
+    echo "========================================================="
+
+    ARCH=$(detect_architecture)
+    OS_INFO=$(detect_os)
+    IFS=':' read -r OS OS_VERSION OS_CODENAME IS_WSL DOCKER_BASE_OS <<< "$OS_INFO"
+
+    print_info "OS: $OS $OS_VERSION ($OS_CODENAME)"
+    [ "$LANG_CODE" = "id" ] && print_info "Arsitektur: $ARCH" || print_info "Architecture: $ARCH"
+    [ "$LANG_CODE" = "id" ] && print_info "Kernel: $(uname -r)" || print_info "Kernel: $(uname -r)"
+    [ "$IS_WSL" = "true" ] && { [ "$LANG_CODE" = "id" ] && print_warning "Environment: WSL (Windows Subsystem for Linux)" || print_warning "Environment: WSL (Windows Subsystem for Linux)"; }
+
+    if [ "$DOCKER_BASE_OS" = "debian" ]; then
+        [ "$LANG_CODE" = "id" ] && print_info "Docker Repository: Debian ($OS_CODENAME)" || print_info "Docker Repository: Debian ($OS_CODENAME)"
+    else
+        [ "$LANG_CODE" = "id" ] && print_info "Docker Repository: Ubuntu ($OS_CODENAME)" || print_info "Docker Repository: Ubuntu ($OS_CODENAME)"
+    fi
+
+    [ "$LANG_CODE" = "id" ] && print_info "IP Server: $(get_server_ip)" || print_info "Server IP: $(get_server_ip)"
+    [ "$LANG_CODE" = "id" ] && print_info "Total RAM: $(get_total_ram) MB" || print_info "Total RAM: $(get_total_ram) MB"
+    [ "$LANG_CODE" = "id" ] && print_info "RAM Tersedia: $(get_available_ram) MB" || print_info "Available RAM: $(get_available_ram) MB"
+
+    echo "---------------------------------------------------------"
+    show_firewall_status
+    echo "========================================================="
+    echo ""
+}
+
+check_system_compatibility() {
+    ARCH=$(detect_architecture)
+    OS_INFO=$(detect_os)
+    IFS=':' read -r OS OS_VERSION OS_CODENAME IS_WSL DOCKER_BASE_OS <<< "$OS_INFO"
+
+    [ "$ARCH" = "unknown" ] && { [ "$LANG_CODE" = "id" ] && print_error "Arsitektur sistem tidak didukung: $(uname -m)" || print_error "System architecture not supported: $(uname -m)"; return 1; }
+    [ "$OS" = "unknown" ]   && { [ "$LANG_CODE" = "id" ] && print_error "Sistem operasi tidak dapat dideteksi" || print_error "Operating system cannot be detected"; return 1; }
+    return 0
+}
+
+get_available_ram() { free -m | awk 'NR==2{print $7}'; }
+get_total_ram()     { free -m | awk 'NR==2{print $2}'; }
+
+choose_memory_limit() {
+    local service_name=$1
+    local auto_mode=${2:-false}
+    TOTAL_RAM=$(get_total_ram)
+    RAM_50=$((TOTAL_RAM * 50 / 100))
+
+    if [ "$auto_mode" = "true" ]; then
+        if [ $TOTAL_RAM -ge 4096 ]; then
+            [ "$LANG_CODE" = "id" ] && print_info "RAM Sistem: ${TOTAL_RAM} MB - Menggunakan mode Unlimited" >&2 || print_info "System RAM: ${TOTAL_RAM} MB - Using Unlimited mode" >&2
+            echo "unlimited"
+        else
+            [ "$LANG_CODE" = "id" ] && print_info "RAM Sistem: ${TOTAL_RAM} MB - Menggunakan limit 50% (${RAM_50} MB)" >&2 || print_info "System RAM: ${TOTAL_RAM} MB - Using 50% limit (${RAM_50} MB)" >&2
+            echo $RAM_50
+        fi
+        return
+    fi
+
+    echo "" >&2
+    if [ "$LANG_CODE" = "id" ]; then
+        print_info "Total RAM Sistem: ${TOTAL_RAM} MB" >&2
+        print_info "Pilih limit RAM untuk $service_name:" >&2
+        echo "  [1] 50% dari total RAM (${RAM_50} MB)" >&2
+        echo "  [2] Unlimited (Tidak ada limit)" >&2
+        echo "" >&2
+        read -p "Pilih 1 atau 2 (kosongkan untuk otomatis): " ram_choice
+    else
+        print_info "Total System RAM: ${TOTAL_RAM} MB" >&2
+        print_info "Choose RAM limit for $service_name:" >&2
+        echo "  [1] 50% of total RAM (${RAM_50} MB)" >&2
+        echo "  [2] Unlimited (No limit)" >&2
+        echo "" >&2
+        read -p "Choose 1 or 2 (leave empty for auto): " ram_choice
+    fi
+
+    if [ -z "$ram_choice" ]; then
+        if [ $TOTAL_RAM -ge 4096 ]; then
+            [ "$LANG_CODE" = "id" ] && print_info "Otomatis: Menggunakan Unlimited (RAM ≥ 4GB)" >&2 || print_info "Auto: Using Unlimited (RAM ≥ 4GB)" >&2
+            echo "unlimited"
+        else
+            [ "$LANG_CODE" = "id" ] && print_info "Otomatis: Menggunakan 50% RAM (${RAM_50} MB)" >&2 || print_info "Auto: Using 50% RAM (${RAM_50} MB)" >&2
+            echo $RAM_50
+        fi
+        return
+    fi
+
+    case $ram_choice in
+        1) echo $RAM_50;;
+        2) echo "unlimited";;
+        *) [ "$LANG_CODE" = "id" ] && print_warning "Pilihan tidak valid, menggunakan mode otomatis" >&2 || print_warning "Invalid choice, using auto mode" >&2; choose_memory_limit "$service_name" true;;
+    esac
+}
+
+# ============================================================
+# INSTALL DOCKER
+# ============================================================
+install_docker() {
+    show_installation_header
+    [ "$LANG_CODE" = "id" ] && animated_text "🐳 Memulai instalasi Docker dan Docker Compose..." 0.05 || animated_text "🐳 Starting Docker and Docker Compose installation..." 0.05
+
+    show_system_info
+    check_system_compatibility || { [ "$LANG_CODE" = "id" ] && print_error "Sistem tidak kompatibel!" || print_error "System not compatible!"; return 1; }
+
+    if command -v docker &> /dev/null; then
+        [ "$LANG_CODE" = "id" ] && print_warning "Docker sudah terinstall!" || print_warning "Docker is already installed!"
+        docker --version
+        docker compose version &> /dev/null && return 0
+    fi
+
+    OS_INFO=$(detect_os)
+    IFS=':' read -r OS OS_VERSION OS_CODENAME IS_WSL DOCKER_BASE_OS <<< "$OS_INFO"
+    ARCH=$(detect_architecture)
+
+    echo ""
+    [ "$LANG_CODE" = "id" ] && print_info "Deteksi Sistem:" || print_info "System Detection:"
+    echo "  - OS Base: $OS"
+    echo "  - Codename: $OS_CODENAME"
+    echo "  - Docker Repo: $DOCKER_BASE_OS"
+    echo "  - Architecture: $ARCH"
+    echo ""
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📦 Mengupdate package list" || loading_animation "📦 Updating package list"
+    safe_apt_get apt-get update || { [ "$LANG_CODE" = "id" ] && print_error "Gagal update package list" || print_error "Failed to update package list"; return 1; }
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🔧 Menginstall prerequisites" || loading_animation "🔧 Installing prerequisites"
+    safe_apt_get apt-get install -y ca-certificates curl gnupg lsb-release software-properties-common apt-transport-https || { [ "$LANG_CODE" = "id" ] && print_error "Gagal install prerequisites" || print_error "Failed to install prerequisites"; return 1; }
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🔍 Memeriksa konfigurasi Docker yang ada" || loading_animation "🔍 Checking existing Docker configuration"
+
+    if grep -Rq "download.docker.com" /etc/apt/ 2>/dev/null; then
+        [ "$LANG_CODE" = "id" ] && print_warning "Ditemukan konfigurasi Docker lama, membersihkan..." || print_warning "Found old Docker configuration, cleaning..."
+    fi
+
+    rm -f /etc/apt/keyrings/docker.gpg /usr/share/keyrings/docker-archive-keyring.gpg \
+          /etc/apt/sources.list.d/docker.list /etc/apt/sources.list.d/docker.list.save 2>/dev/null
+    [ -f /etc/apt/sources.list ] && sed -i '/download.docker.com/d' /etc/apt/sources.list 2>/dev/null
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🧹 Membersihkan cache APT" || loading_animation "🧹 Cleaning APT cache"
+    apt-get clean 2>/dev/null || true
+    apt-get autoclean 2>/dev/null || true
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📋 Memperbarui daftar repository" || loading_animation "📋 Updating repository list"
+    apt-get update 2>/dev/null || true
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🔐 Menambahkan Docker GPG key" || loading_animation "🔐 Adding Docker GPG key"
+    install -m 0755 -d /etc/apt/keyrings
+
+    SYSTEM_ARCH=$(dpkg --print-architecture)
+    SYSTEM_CODENAME=$(lsb_release -cs 2>/dev/null || echo "")
+
+    if [ "$DOCKER_BASE_OS" = "debian" ]; then
+        DOCKER_REPO_URL="https://download.docker.com/linux/debian"
+        DOCKER_GPG_URL="https://download.docker.com/linux/debian/gpg"
+    else
+        DOCKER_REPO_URL="https://download.docker.com/linux/ubuntu"
+        DOCKER_GPG_URL="https://download.docker.com/linux/ubuntu/gpg"
+    fi
+
+    [ "$LANG_CODE" = "id" ] && print_info "Menggunakan repository $DOCKER_BASE_OS untuk Docker..." || print_info "Using $DOCKER_BASE_OS repository for Docker..."
+
+    curl -fsSL $DOCKER_GPG_URL | gpg --dearmor -o /etc/apt/keyrings/docker.gpg || { [ "$LANG_CODE" = "id" ] && print_error "Gagal menambahkan Docker GPG key" || print_error "Failed to add Docker GPG key"; return 1; }
+    chmod a+r /etc/apt/keyrings/docker.gpg
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📦 Menambahkan Docker repository ($DOCKER_BASE_OS ${SYSTEM_CODENAME})" || loading_animation "📦 Adding Docker repository ($DOCKER_BASE_OS ${SYSTEM_CODENAME})"
+    echo "deb [arch=${SYSTEM_ARCH} signed-by=/etc/apt/keyrings/docker.gpg] ${DOCKER_REPO_URL} ${SYSTEM_CODENAME} stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🔄 Mengupdate package list dari repository Docker" || loading_animation "🔄 Updating package list from Docker repository"
+    safe_apt_get apt-get update || { [ "$LANG_CODE" = "id" ] && print_error "Gagal update package list dari repository Docker" || print_error "Failed to update package list from Docker repository"; return 1; }
+
+    [ "$LANG_CODE" = "id" ] && animated_text "🐳 Menginstall Docker..." 0.08 || animated_text "🐳 Installing Docker..." 0.08
+    safe_apt_get apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || {
+        [ "$LANG_CODE" = "id" ] && print_warning "Gagal install dengan plugin, mencoba tanpa plugin..." || print_warning "Failed to install with plugins, trying without plugins..."
+        safe_apt_get apt-get install -y docker-ce docker-ce-cli containerd.io || { [ "$LANG_CODE" = "id" ] && print_error "Instalasi Docker gagal total" || print_error "Docker installation failed completely"; return 1; }
+    }
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "⚡ Menjalankan Docker service" || loading_animation "⚡ Starting Docker service"
+    if [ "$IS_WSL" = "true" ]; then
+        [ "$LANG_CODE" = "id" ] && print_warning "WSL terdeteksi - menggunakan service start khusus..." || print_warning "WSL detected - using special service start..."
+        service docker start 2>/dev/null || systemctl start docker 2>/dev/null
+    else
+        systemctl start docker && systemctl enable docker
+    fi
+
+    [ "$LANG_CODE" = "id" ] && show_progress_bar 20 "⏳ Menunggu Docker siap..." || show_progress_bar 20 "⏳ Waiting for Docker to be ready..."
+
+    if docker --version; then
+        [ "$LANG_CODE" = "id" ] && print_success "✅ Docker berhasil diinstall!" || print_success "✅ Docker installed successfully!"
+
+        if docker compose version &> /dev/null; then
+            [ "$LANG_CODE" = "id" ] && print_success "✅ Docker Compose plugin tersedia!" || print_success "✅ Docker Compose plugin available!"
+            docker compose version
+        else
+            [ "$LANG_CODE" = "id" ] && print_warning "Docker Compose plugin tidak tersedia, menginstall standalone..." || print_warning "Docker Compose plugin not available, installing standalone..."
+            [ "$LANG_CODE" = "id" ] && loading_animation "📦 Menginstall Docker Compose standalone" || loading_animation "📦 Installing Docker Compose standalone"
+            COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d\" -f4)
+            curl -L "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+            chmod +x /usr/local/bin/docker-compose
+            ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
+            docker-compose --version && { [ "$LANG_CODE" = "id" ] && print_success "✅ Docker Compose standalone berhasil diinstall!" || print_success "✅ Docker Compose standalone installed successfully!"; }
+        fi
+
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════╗"
+        [ "$LANG_CODE" = "id" ] && echo "║                    INSTALASI SELESAI!                   ║" || echo "║                  INSTALLATION COMPLETE!                 ║"
+        echo "║               Docker & Docker Compose                   ║"
+        [ "$LANG_CODE" = "id" ] && echo "║                berhasil diinstall! 🐳                   ║" || echo "║              successfully installed! 🐳                 ║"
+        echo "╚══════════════════════════════════════════════════════════╝"
+        return 0
+    else
+        [ "$LANG_CODE" = "id" ] && print_error "❌ Instalasi Docker gagal diverifikasi" || print_error "❌ Docker installation verification failed"
+        return 1
+    fi
+}
+
+# ============================================================
+# UNINSTALL DOCKER
+# ============================================================
+uninstall_docker() {
+    echo ""
+    if [ "$LANG_CODE" = "id" ]; then
+        print_warning "PERINGATAN: Ini akan menghapus Docker, semua container, images, volumes, dan networks!"
+        read -p "Apakah Anda yakin? (y/n): " confirm
+    else
+        print_warning "WARNING: This will remove Docker, all containers, images, volumes, and networks!"
+        read -p "Are you sure? (y/n): " confirm
+    fi
+
+    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { [ "$LANG_CODE" = "id" ] && print_info "Uninstall dibatalkan" || print_info "Uninstall cancelled"; return 1; }
+
+    if ! command -v docker &> /dev/null; then
+        [ "$LANG_CODE" = "id" ] && print_warning "Docker tidak terinstall!" || print_warning "Docker is not installed!"
+        return 0
+    fi
+
+    echo ""
+    echo "========================================================="
+    [ "$LANG_CODE" = "id" ] && print_info "Memulai proses uninstall Docker..." || print_info "Starting Docker uninstall process..."
+    echo "========================================================="
+    echo ""
+
+    [ "$LANG_CODE" = "id" ] && print_info "Menghentikan semua container..." || print_info "Stopping all containers..."
+    CONTAINERS=$(docker ps -aq 2>/dev/null)
+    [ -n "$CONTAINERS" ] && docker stop $CONTAINERS 2>&1 | grep -v "No such container" || true
+
+    [ "$LANG_CODE" = "id" ] && print_info "Menghapus semua container..." || print_info "Removing all containers..."
+    CONTAINERS=$(docker ps -aq 2>/dev/null)
+    [ -n "$CONTAINERS" ] && docker rm $CONTAINERS 2>&1 | grep -v "No such container" || true
+
+    [ "$LANG_CODE" = "id" ] && print_info "Menghapus semua images..." || print_info "Removing all images..."
+    IMAGES=$(docker images -aq 2>/dev/null)
+    [ -n "$IMAGES" ] && docker rmi -f $IMAGES 2>&1 | grep -v "No such image" || true
+
+    [ "$LANG_CODE" = "id" ] && print_info "Menghapus semua volumes..." || print_info "Removing all volumes..."
+    VOLUMES=$(docker volume ls -q 2>/dev/null)
+    [ -n "$VOLUMES" ] && docker volume rm $VOLUMES 2>&1 | grep -v "No such volume" || true
+
+    [ "$LANG_CODE" = "id" ] && print_info "Menghapus semua networks..." || print_info "Removing all networks..."
+    NETWORKS=$(docker network ls -q --filter type=custom 2>/dev/null)
+    [ -n "$NETWORKS" ] && docker network rm $NETWORKS 2>&1 | grep -v "No such network\|cannot be removed" || true
+
+    echo ""
+    [ "$LANG_CODE" = "id" ] && print_info "Membersihkan sistem Docker..." || print_info "Pruning Docker system..."
+    docker system prune -af --volumes
+
+    OS_INFO=$(detect_os)
+    IFS=':' read -r OS OS_VERSION OS_CODENAME IS_WSL DOCKER_BASE_OS <<< "$OS_INFO"
+
+    [ "$LANG_CODE" = "id" ] && print_info "Menghentikan Docker service..." || print_info "Stopping Docker service..."
+    if [ "$IS_WSL" = "true" ]; then
+        service docker stop 2>/dev/null
+    else
+        systemctl stop docker 2>/dev/null; systemctl stop docker.socket 2>/dev/null
+        systemctl disable docker 2>/dev/null; systemctl disable docker.socket 2>/dev/null
+    fi
+
+    [ "$LANG_CODE" = "id" ] && print_info "Menghapus Docker packages..." || print_info "Removing Docker packages..."
+    safe_apt_get apt-get purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin docker-compose || { [ "$LANG_CODE" = "id" ] && print_error "Gagal menghapus Docker packages" || print_error "Failed to remove Docker packages"; return 1; }
+
+    [ "$LANG_CODE" = "id" ] && print_info "Menghapus direktori Docker..." || print_info "Removing Docker directories..."
+    rm -rf /var/lib/docker /var/lib/containerd /etc/docker /etc/apt/keyrings/docker.gpg \
+           /etc/apt/sources.list.d/docker.list /usr/local/bin/docker-compose /usr/bin/docker-compose
+
+    [ "$LANG_CODE" = "id" ] && print_info "Membersihkan paket yang tidak digunakan..." || print_info "Cleaning up unused packages..."
+    safe_apt_get apt-get autoremove -y
+    safe_apt_get apt-get autoclean
+
+    [ "$LANG_CODE" = "id" ] && print_success "Docker berhasil dihapus dari sistem!" || print_success "Docker successfully removed from system!"
+    return 0
+}
+
+# ============================================================
+# INSTALL GENIEACS
+# ============================================================
+install_genieacs() {
+    show_installation_header
+    [ "$LANG_CODE" = "id" ] && animated_text "🚀 Memulai instalasi GenieACS..." 0.05 || animated_text "🚀 Starting GenieACS installation..." 0.05
+
+    if ! command -v docker &> /dev/null; then
+        [ "$LANG_CODE" = "id" ] && print_error "Docker belum terinstall! Silakan install Docker terlebih dahulu" || print_error "Docker is not installed! Please install Docker first"
+        return 1
+    fi
+
+    configure_firewall "3000/tcp" "7547/tcp" "7557/tcp" "7567/tcp"
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📁 Menyiapkan direktori GenieACS" || loading_animation "📁 Preparing GenieACS directory"
+    cd /root || return 1
+
+    if [ -d "genieacs" ]; then
+        if [ "$LANG_CODE" = "id" ]; then
+            print_warning "Direktori genieacs sudah ada!"
+            read -p "Hapus dan buat ulang? (y/n): " confirm
+        else
+            print_warning "GenieACS directory already exists!"
+            read -p "Remove and recreate? (y/n): " confirm
+        fi
+
+        if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+            [ "$LANG_CODE" = "id" ] && loading_animation "🗑️  Menghapus container yang ada" || loading_animation "🗑️  Removing existing containers"
+            docker stop genieacs mongo-genieacs 2>/dev/null
+            docker rm genieacs mongo-genieacs 2>/dev/null
+            rm -rf genieacs
+        else
+            return 1
+        fi
+    fi
+
+    mkdir -p genieacs && cd genieacs || return 1
+
+    MEMORY_LIMIT=$(choose_memory_limit "GenieACS")
+    [ "$MEMORY_LIMIT" = "unlimited" ] \
+        && { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: Unlimited" || print_info "Memory limit: Unlimited"; } \
+        || { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: ${MEMORY_LIMIT}M" || print_info "Memory limit: ${MEMORY_LIMIT}M"; }
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📝 Membuat konfigurasi Docker Compose" || loading_animation "📝 Creating Docker Compose configuration"
+
+    GENIEACS_JWT_SECRET=$(openssl rand -hex 32)
+
+    if [ "$MEMORY_LIMIT" = "unlimited" ]; then
+        cat > docker-compose.yml <<EOF
+services:
+  genieacs:
+    cpu_shares: 90
+    container_name: genieacs
+    depends_on:
+      - mongo
+    environment:
+      - GENIEACS_CWMP_ACCESS_LOG_FILE=/var/log/genieacs/genieacs-cwmp-access.log
+      - GENIEACS_DEBUG_FILE=/var/log/genieacs/genieacs-debug.yaml
+      - GENIEACS_EXT_DIR=/opt/genieacs/ext
+      - GENIEACS_FS_ACCESS_LOG_FILE=/var/log/genieacs/genieacs-fs-access.log
+      - GENIEACS_MONGODB_CONNECTION_URL=mongodb://mongo/genieacs
+      - GENIEACS_NBI_ACCESS_LOG_FILE=/var/log/genieacs/genieacs-nbi-access.log
+      - GENIEACS_UI_ACCESS_LOG_FILE=/var/log/genieacs/genieacs-ui-access.log
+      - GENIEACS_UI_JWT_SECRET=${GENIEACS_JWT_SECRET}
+    hostname: genieacs
+    image: drumsergio/genieacs:latest
+    ports:
+      - "3000:3000"
+      - "7547:7547"
+      - "7557:7557"
+      - "7567:7567"
+    restart: always
+    networks:
+      - genieacs_network
+  mongo:
+    cpu_shares: 90
+    container_name: mongo-genieacs
+    environment:
+      - MONGO_DATA_DIR=/data/db
+      - MONGO_LOG_DIR=/var/log/mongodb
+    hostname: mongo-genieacs
+    image: mongo:4.4.6
+    restart: always
+    networks:
+      - genieacs_network
+    volumes:
+      - ./mongo-data:/data/db
+networks:
+  genieacs_network:
+    driver: bridge
+EOF
+    else
+        cat > docker-compose.yml <<EOF
+services:
+  genieacs:
+    cpu_shares: 90
+    container_name: genieacs
+    depends_on:
+      - mongo
+    deploy:
+      resources:
+        limits:
+          memory: ${MEMORY_LIMIT}M
+    environment:
+      - GENIEACS_CWMP_ACCESS_LOG_FILE=/var/log/genieacs/genieacs-cwmp-access.log
+      - GENIEACS_DEBUG_FILE=/var/log/genieacs/genieacs-debug.yaml
+      - GENIEACS_EXT_DIR=/opt/genieacs/ext
+      - GENIEACS_FS_ACCESS_LOG_FILE=/var/log/genieacs/genieacs-fs-access.log
+      - GENIEACS_MONGODB_CONNECTION_URL=mongodb://mongo/genieacs
+      - GENIEACS_NBI_ACCESS_LOG_FILE=/var/log/genieacs/genieacs-nbi-access.log
+      - GENIEACS_UI_ACCESS_LOG_FILE=/var/log/genieacs/genieacs-ui-access.log
+      - GENIEACS_UI_JWT_SECRET=${GENIEACS_JWT_SECRET}
+    hostname: genieacs
+    image: drumsergio/genieacs:latest
+    ports:
+      - "3000:3000"
+      - "7547:7547"
+      - "7557:7557"
+      - "7567:7567"
+    restart: always
+    networks:
+      - genieacs_network
+  mongo:
+    cpu_shares: 90
+    container_name: mongo-genieacs
+    deploy:
+      resources:
+        limits:
+          memory: ${MEMORY_LIMIT}M
+    environment:
+      - MONGO_DATA_DIR=/data/db
+      - MONGO_LOG_DIR=/var/log/mongodb
+    hostname: mongo-genieacs
+    image: mongo:4.4.6
+    restart: always
+    networks:
+      - genieacs_network
+    volumes:
+      - ./mongo-data:/data/db
+networks:
+  genieacs_network:
+    driver: bridge
+EOF
+    fi
+
+    echo ""
+    echo "========================================================="
+    [ "$LANG_CODE" = "id" ] && animated_text "🐳 Memulai Docker Compose..." 0.08 || animated_text "🐳 Starting Docker Compose..." 0.08
+    [ "$LANG_CODE" = "id" ] && print_info "Proses download dan start container akan terlihat di bawah:" || print_info "Download and container start process will be shown below:"
+    echo "========================================================="
+    echo ""
+
+    if docker compose up -d; then
+        COMPOSE_SUCCESS=true
+    elif docker-compose up -d; then
+        COMPOSE_SUCCESS=true
+    else
+        COMPOSE_SUCCESS=false
+    fi
+
+    echo ""
+    echo "========================================================="
+
+    if [ "$COMPOSE_SUCCESS" = true ]; then
+        [ "$LANG_CODE" = "id" ] && print_success "🎉 Docker Compose berhasil dijalankan!" || print_success "🎉 Docker Compose started successfully!"
+    else
+        [ "$LANG_CODE" = "id" ] && print_error "❌ Gagal menjalankan Docker Compose" || print_error "❌ Failed to start Docker Compose"
+        return 1
+    fi
+    echo "========================================================="
+    echo ""
+
+    [ "$LANG_CODE" = "id" ] && show_progress_bar 40 "⏳ Menunggu container GenieACS dan MongoDB siap..." || show_progress_bar 40 "⏳ Waiting for GenieACS and MongoDB containers to be ready..."
+
+    if docker ps | grep -q genieacs && docker ps | grep -q mongo-genieacs; then
+        [ "$LANG_CODE" = "id" ] && print_success "✅ GenieACS berhasil diinstall!" || print_success "✅ GenieACS installed successfully!"
+        [ "$LANG_CODE" = "id" ] && animated_text "⚙️  Melanjutkan ke konfigurasi database..." 0.08 || animated_text "⚙️  Proceeding to database configuration..." 0.08
+        configure_genieacs
+        return $?
+    else
+        [ "$LANG_CODE" = "id" ] && print_error "❌ Container gagal berjalan" || print_error "❌ Containers failed to start"
+        docker ps -a
+        return 1
+    fi
+}
+
+# ============================================================
+# CONFIGURE GENIEACS (DB from GitHub Raw)
+# ============================================================
+configure_genieacs() {
+    echo ""
+    [ "$LANG_CODE" = "id" ] && animated_text "⚙️  Memulai konfigurasi GenieACS..." 0.05 || animated_text "⚙️  Starting GenieACS configuration..." 0.05
+
+    if ! docker ps | grep -q mongo-genieacs; then
+        [ "$LANG_CODE" = "id" ] && print_error "Container mongo-genieacs tidak berjalan! Install GenieACS terlebih dahulu" || print_error "Container mongo-genieacs is not running! Install GenieACS first"
+        return 1
+    fi
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📁 Menyiapkan direktori temp" || loading_animation "📁 Preparing temp directory"
+    cd /tmp || return 1
+    [ -d "genieacs-db" ] && rm -rf genieacs-db
+    mkdir -p genieacs-db
+
+    # Database files to download from GitHub Raw
+    DB_FILES=(
+        "cache.bson"
+        "cache.metadata.json"
+        "config.bson"
+        "config.metadata.json"
+        "devices.metadata.json"
+        "faults.metadata.json"
+        "locks.metadata.json"
+        "permissions.bson"
+        "permissions.metadata.json"
+        "presets.bson"
+        "presets.metadata.json"
+        "provisions.bson"
+        "provisions.metadata.json"
+        "tasks.metadata.json"
+        "users.bson"
+        "users.metadata.json"
+        "virtualParameters.bson"
+        "virtualParameters.metadata.json"
+    )
+
+    if [ "$LANG_CODE" = "id" ]; then
+        print_info "Sumber DB: ${DB_URL}"
+        loading_animation "📦 Mengunduh ${#DB_FILES[@]} file database dari GitHub"
+    else
+        print_info "DB Source: ${DB_URL}"
+        loading_animation "📦 Downloading ${#DB_FILES[@]} database files from GitHub"
+    fi
+
+    local failed=0
+    for file in "${DB_FILES[@]}"; do
+        if curl -f -s -L -o "genieacs-db/$file" "${DB_URL}/${file}"; then
+            echo "  ✓ $file"
+        else
+            [ "$LANG_CODE" = "id" ] && print_error "Gagal mengunduh $file dari ${DB_URL}/${file}" || print_error "Failed to download $file from ${DB_URL}/${file}"
+            failed=$((failed + 1))
+        fi
+    done
+
+    if [ $failed -gt 0 ]; then
+        [ "$LANG_CODE" = "id" ] && print_error "❌ $failed file gagal diunduh. Periksa koneksi dan pastikan folder 'db' ada di repo GitHub." || print_error "❌ $failed files failed to download. Check connection and ensure 'db' folder exists in GitHub repo."
+        return 1
+    fi
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "✅ Memverifikasi file database" || loading_animation "✅ Verifying database files"
+    ls -la genieacs-db/ || { [ "$LANG_CODE" = "id" ] && print_error "Direktori database tidak ditemukan" || print_error "Database directory not found"; return 1; }
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📂 Menyalin file ke container" || loading_animation "📂 Copying files to container"
+    docker cp genieacs-db/ mongo-genieacs:/tmp/db/ || { [ "$LANG_CODE" = "id" ] && print_error "Gagal menyalin file ke container" || print_error "Failed to copy files to container"; return 1; }
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🔄 Merestore database" || loading_animation "🔄 Restoring database"
+    docker exec mongo-genieacs mongorestore --drop --db genieacs /tmp/db/ || { [ "$LANG_CODE" = "id" ] && print_error "Gagal restore database" || print_error "Failed to restore database"; return 1; }
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🔄 Merestart GenieACS" || loading_animation "🔄 Restarting GenieACS"
+    docker restart genieacs || { [ "$LANG_CODE" = "id" ] && print_error "Gagal restart GenieACS" || print_error "Failed to restart GenieACS"; return 1; }
+
+    [ "$LANG_CODE" = "id" ] && show_progress_bar 20 "⏳ Menunggu GenieACS siap..." || show_progress_bar 20 "⏳ Waiting for GenieACS to be ready..."
+
+    [ "$LANG_CODE" = "id" ] && print_success "✅ Konfigurasi GenieACS berhasil!" || print_success "✅ GenieACS configuration successful!"
+
+    SERVER_IP=$(get_server_ip)
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════╗"
+    [ "$LANG_CODE" = "id" ] && echo "║                    INSTALASI SELESAI!                   ║" || echo "║                  INSTALLATION COMPLETE!                 ║"
+    echo "╠══════════════════════════════════════════════════════════╣"
+    echo "║  🌐 URL GenieACS : http://${SERVER_IP}:3000"
+    echo "║  👤 Username     : admin                                 ║"
+    echo "║  🔑 Password     : admin                                 ║"
+    echo "╚══════════════════════════════════════════════════════════╝"
+
+    cd /tmp && rm -rf genieacs-db
+    return 0
+}
+
+# ============================================================
+# UNINSTALL GENIEACS
+# ============================================================
+uninstall_genieacs() {
+    echo ""
+    if [ "$LANG_CODE" = "id" ]; then
+        print_warning "PERINGATAN: Ini akan menghapus GenieACS, database, dan semua data!"
+        read -p "Apakah Anda yakin? (y/n): " confirm
+    else
+        print_warning "WARNING: This will remove GenieACS, database, and all data!"
+        read -p "Are you sure? (y/n): " confirm
+    fi
+
+    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { [ "$LANG_CODE" = "id" ] && print_info "Uninstall dibatalkan" || print_info "Uninstall cancelled"; return 1; }
+
+    echo ""
+    echo "========================================================="
+    [ "$LANG_CODE" = "id" ] && print_info "Memulai proses uninstall GenieACS..." || print_info "Starting GenieACS uninstall process..."
+    echo "========================================================="
+    echo ""
+
+    [ "$LANG_CODE" = "id" ] && print_info "Menghentikan dan menghapus container..." || print_info "Stopping and removing containers..."
+    docker stop genieacs mongo-genieacs 2>/dev/null
+    docker rm genieacs mongo-genieacs 2>/dev/null
+
+    [ "$LANG_CODE" = "id" ] && print_info "Menghapus Docker images..." || print_info "Removing Docker images..."
+    docker rmi drumsergio/genieacs:latest 2>/dev/null
+    docker rmi mongo:4.4.6 2>/dev/null
+
+    [ "$LANG_CODE" = "id" ] && print_info "Menghapus network..." || print_info "Removing network..."
+    docker network rm genieacs_genieacs_network 2>&1 | grep -v "not found" || true
+
+    [ "$LANG_CODE" = "id" ] && print_info "Menghapus direktori GenieACS..." || print_info "Removing GenieACS directory..."
+    rm -rf /root/genieacs
+
+    if [ "$(check_ufw_status)" = "active" ]; then
+        echo ""
+        [ "$LANG_CODE" = "id" ] && read -p "Hapus rules firewall GenieACS? (y/n): " remove_fw || read -p "Remove GenieACS firewall rules? (y/n): " remove_fw
+        if [ "$remove_fw" = "y" ] || [ "$remove_fw" = "Y" ]; then
+            ufw delete allow 3000/tcp 2>/dev/null; ufw delete allow 7547/tcp 2>/dev/null
+            ufw delete allow 7557/tcp 2>/dev/null; ufw delete allow 7567/tcp 2>/dev/null
+            ufw reload &> /dev/null
+            [ "$LANG_CODE" = "id" ] && print_success "Rules firewall berhasil dihapus" || print_success "Firewall rules removed successfully"
+        fi
+    fi
+
+    echo ""
+    [ "$LANG_CODE" = "id" ] && print_info "Membersihkan sistem..." || print_info "Pruning system..."
+    command -v docker &> /dev/null && docker system prune -f
+
+    echo ""
+    [ "$LANG_CODE" = "id" ] && print_success "GenieACS berhasil dihapus!" || print_success "GenieACS successfully removed!"
+    return 0
+}
+
+# ============================================================
+# INSTALL GENIEACS PANEL
+# ============================================================
+install_genieacs_panel() {
+    show_installation_header
+    [ "$LANG_CODE" = "id" ] && animated_text "🚀 Memulai instalasi GenieACS Panel..." 0.05 || animated_text "🚀 Starting GenieACS Panel installation..." 0.05
+
+    if ! command -v docker &> /dev/null; then
+        [ "$LANG_CODE" = "id" ] && print_error "Docker belum terinstall! Silakan install Docker terlebih dahulu" || print_error "Docker is not installed! Please install Docker first"
+        return 1
+    fi
+
+    configure_firewall "1997/tcp"
+
+    ARCH=$(detect_architecture)
+    [ "$LANG_CODE" = "id" ] && print_info "Arsitektur terdeteksi: $ARCH" || print_info "Detected architecture: $ARCH"
+    [ "$ARCH" = "unknown" ] && { [ "$LANG_CODE" = "id" ] && print_error "Arsitektur tidak didukung: $(uname -m)" || print_error "Unsupported architecture: $(uname -m)"; return 1; }
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📁 Menyiapkan direktori GenieACS Panel" || loading_animation "📁 Preparing GenieACS Panel directory"
+    cd /root || return 1
+
+    if [ -d "genieacspanel" ]; then
+        if [ "$LANG_CODE" = "id" ]; then
+            print_warning "Direktori genieacspanel sudah ada!"
+            read -p "Hapus dan buat ulang? (y/n): " confirm
+        else
+            print_warning "GenieACS Panel directory already exists!"
+            read -p "Remove and recreate? (y/n): " confirm
+        fi
+
+        if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+            [ "$LANG_CODE" = "id" ] && loading_animation "🗑️  Menghapus container yang ada" || loading_animation "🗑️  Removing existing container"
+            docker stop genieacs-panel-api 2>/dev/null; docker rm genieacs-panel-api 2>/dev/null
+            rm -rf genieacspanel
+        else
+            return 1
+        fi
+    fi
+
+    mkdir -p genieacspanel && cd genieacspanel || return 1
+
+    MEMORY_LIMIT=$(choose_memory_limit "GenieACS Panel")
+    [ "$MEMORY_LIMIT" = "unlimited" ] \
+        && { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: Unlimited" || print_info "Memory limit: Unlimited"; } \
+        || { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: ${MEMORY_LIMIT}M" || print_info "Memory limit: ${MEMORY_LIMIT}M"; }
+
+    JWT_SECRET=$(openssl rand -hex 32)
+    IMAGE="solusidigitalnet/genieacspanelapi:latest"
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📝 Membuat konfigurasi Docker Compose" || loading_animation "📝 Creating Docker Compose configuration"
+
+    if [ "$MEMORY_LIMIT" = "unlimited" ]; then
+        cat > docker-compose.yml <<EOF
+services:
+  genieacs-panel-api:
+    image: ${IMAGE}
+    container_name: genieacs-panel-api
+    ports:
+      - "1997:1997"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=1h
+      - REFRESH_TOKEN_EXPIRES_IN=7d
+      - add_wan=yes
+      - NODE_ENV=production
+    restart: unless-stopped
+EOF
+    else
+        cat > docker-compose.yml <<EOF
+services:
+  genieacs-panel-api:
+    image: ${IMAGE}
+    container_name: genieacs-panel-api
+    deploy:
+      resources:
+        limits:
+          memory: ${MEMORY_LIMIT}M
+    ports:
+      - "1997:1997"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=1h
+      - REFRESH_TOKEN_EXPIRES_IN=7d
+      - add_wan=yes
+      - NODE_ENV=production
+    restart: unless-stopped
+EOF
+    fi
+
+    echo ""; echo "========================================================="; [ "$LANG_CODE" = "id" ] && animated_text "🐳 Memulai Docker Compose..." 0.08 || animated_text "🐳 Starting Docker Compose..." 0.08; echo "========================================================="; echo ""
+
+    if docker compose up -d; then COMPOSE_SUCCESS=true; elif docker-compose up -d; then COMPOSE_SUCCESS=true; else COMPOSE_SUCCESS=false; fi
+
+    echo ""; echo "========================================================="
+    if [ "$COMPOSE_SUCCESS" = true ]; then
+        [ "$LANG_CODE" = "id" ] && print_success "🎉 Docker Compose berhasil dijalankan!" || print_success "🎉 Docker Compose started successfully!"
+    else
+        [ "$LANG_CODE" = "id" ] && print_error "❌ Gagal menjalankan Docker Compose" || print_error "❌ Failed to start Docker Compose"
+        return 1
+    fi
+    echo "========================================================="; echo ""
+
+    [ "$LANG_CODE" = "id" ] && show_progress_bar 30 "⏳ Menunggu container siap..." || show_progress_bar 30 "⏳ Waiting for container to be ready..."
+
+    if docker ps | grep -q genieacs-panel-api; then
+        [ "$LANG_CODE" = "id" ] && print_success "✅ GenieACS Panel berhasil diinstall dan berjalan!" || print_success "✅ GenieACS Panel installed and running successfully!"
+        SERVER_IP=$(get_server_ip)
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════╗"
+        [ "$LANG_CODE" = "id" ] && echo "║                    INSTALASI SELESAI!                   ║" || echo "║                  INSTALLATION COMPLETE!                 ║"
+        echo "╠══════════════════════════════════════════════════════════╣"
+        echo "║  🌐 URL Panel: http://${SERVER_IP}:1997"
+        echo "║  👤 Username : admin                                     ║"
+        echo "║  🔑 Password : solusidigitalnet                          ║"
+        echo "╚══════════════════════════════════════════════════════════╝"
+        return 0
+    else
+        [ "$LANG_CODE" = "id" ] && print_error "❌ Container gagal berjalan" || print_error "❌ Container failed to start"
+        docker ps -a; docker logs genieacs-panel-api
+        return 1
+    fi
+}
+
+# ============================================================
+# UNINSTALL GENIEACS PANEL
+# ============================================================
+uninstall_genieacs_panel() {
+    show_installation_header
+    [ "$LANG_CODE" = "id" ] && animated_text "⚠️  PERINGATAN: Ini akan menghapus GenieACS Panel!" 0.05 || animated_text "⚠️  WARNING: This will remove GenieACS Panel!" 0.05
+    [ "$LANG_CODE" = "id" ] && read -p "Apakah Anda yakin? (y/n): " confirm || read -p "Are you sure? (y/n): " confirm
+    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { [ "$LANG_CODE" = "id" ] && print_info "Uninstall dibatalkan" || print_info "Uninstall cancelled"; return 1; }
+
+    echo ""; echo "========================================================="; [ "$LANG_CODE" = "id" ] && animated_text "🗑️  Memulai proses uninstall GenieACS Panel..." 0.08 || animated_text "🗑️  Starting GenieACS Panel uninstall process..." 0.08; echo "========================================================="; echo ""
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🛑 Menghentikan dan menghapus container" || loading_animation "🛑 Stopping and removing container"
+    docker stop genieacs-panel-api 2>/dev/null; docker rm genieacs-panel-api 2>/dev/null
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🐳 Menghapus Docker image" || loading_animation "🐳 Removing Docker image"
+    docker rmi solusidigitalnet/genieacspanelapi:latest 2>&1 | grep -v "No such image" || true
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📁 Menghapus direktori GenieACS Panel" || loading_animation "📁 Removing GenieACS Panel directory"
+    rm -rf /root/genieacspanel
+
+    if [ "$(check_ufw_status)" = "active" ]; then
+        echo ""
+        [ "$LANG_CODE" = "id" ] && read -p "Hapus rules firewall GenieACS Panel? (y/n): " remove_fw || read -p "Remove GenieACS Panel firewall rules? (y/n): " remove_fw
+        if [ "$remove_fw" = "y" ] || [ "$remove_fw" = "Y" ]; then
+            [ "$LANG_CODE" = "id" ] && loading_animation "🔥 Menghapus rules firewall" || loading_animation "🔥 Removing firewall rules"
+            ufw delete allow 1997/tcp 2>/dev/null; ufw reload &> /dev/null
+            [ "$LANG_CODE" = "id" ] && print_success "✅ Rules firewall berhasil dihapus" || print_success "✅ Firewall rules removed successfully"
+        fi
+    fi
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🧹 Membersihkan sistem" || loading_animation "🧹 Cleaning up system"
+    command -v docker &> /dev/null && docker system prune -f
+
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════╗"
+    [ "$LANG_CODE" = "id" ] && echo "║                    UNINSTALL SELESAI!                   ║" || echo "║                  UNINSTALL COMPLETE!                    ║"
+    [ "$LANG_CODE" = "id" ] && echo "║          GenieACS Panel berhasil dihapus! ✅             ║" || echo "║        GenieACS Panel successfully removed! ✅           ║"
+    echo "╚══════════════════════════════════════════════════════════╝"
+    return 0
+}
+
+# ============================================================
+# INSTALL CUSTOMER PORTAL
+# ============================================================
+install_customer_portal() {
+    show_installation_header
+    [ "$LANG_CODE" = "id" ] && animated_text "🚀 Memulai instalasi Customer Portal..." 0.05 || animated_text "🚀 Starting Customer Portal installation..." 0.05
+
+    if ! command -v docker &> /dev/null; then
+        [ "$LANG_CODE" = "id" ] && print_error "Docker belum terinstall! Silakan install Docker terlebih dahulu" || print_error "Docker is not installed! Please install Docker first"
+        return 1
+    fi
+
+    configure_firewall "1998/tcp"
+
+    ARCH=$(detect_architecture)
+    [ "$LANG_CODE" = "id" ] && print_info "Arsitektur terdeteksi: $ARCH" || print_info "Detected architecture: $ARCH"
+    [ "$ARCH" = "unknown" ] && { [ "$LANG_CODE" = "id" ] && print_error "Arsitektur tidak didukung: $(uname -m)" || print_error "Unsupported architecture: $(uname -m)"; return 1; }
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📁 Menyiapkan direktori Customer Portal" || loading_animation "📁 Preparing Customer Portal directory"
+    cd /root || return 1
+
+    if [ -d "customerportal" ]; then
+        if [ "$LANG_CODE" = "id" ]; then
+            print_warning "Direktori customerportal sudah ada!"
+            read -p "Hapus dan buat ulang? (y/n): " confirm
+        else
+            print_warning "Customer Portal directory already exists!"
+            read -p "Remove and recreate? (y/n): " confirm
+        fi
+
+        if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+            [ "$LANG_CODE" = "id" ] && loading_animation "🗑️  Menghapus container yang ada" || loading_animation "🗑️  Removing existing container"
+            docker stop customerportal 2>/dev/null; docker rm customerportal 2>/dev/null
+            rm -rf customerportal
+        else
+            return 1
+        fi
+    fi
+
+    mkdir -p customerportal && cd customerportal || return 1
+
+    MEMORY_LIMIT=$(choose_memory_limit "Customer Portal")
+    [ "$MEMORY_LIMIT" = "unlimited" ] \
+        && { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: Unlimited" || print_info "Memory limit: Unlimited"; } \
+        || { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: ${MEMORY_LIMIT}M" || print_info "Memory limit: ${MEMORY_LIMIT}M"; }
+
+    SESSION_SECRET=$(openssl rand -hex 32)
+
+    echo ""
+    if [ "$LANG_CODE" = "id" ]; then
+        print_info "Konfigurasi Customer Portal:"
+        echo "Masukkan PORTAL_API_KEY dari Panel Settings:"
+        read -p "PORTAL_API_KEY: " PORTAL_API_KEY
+        while [ -z "$PORTAL_API_KEY" ]; do
+            print_error "PORTAL_API_KEY tidak boleh kosong!"
+            read -p "PORTAL_API_KEY: " PORTAL_API_KEY
+        done
+    else
+        print_info "Customer Portal Configuration:"
+        echo "Enter PORTAL_API_KEY from Panel Settings:"
+        read -p "PORTAL_API_KEY: " PORTAL_API_KEY
+        while [ -z "$PORTAL_API_KEY" ]; do
+            print_error "PORTAL_API_KEY cannot be empty!"
+            read -p "PORTAL_API_KEY: " PORTAL_API_KEY
+        done
+    fi
+
+    IMAGE="solusidigitalnet/customerportal:latest"
+    [ "$LANG_CODE" = "id" ] && loading_animation "📝 Membuat konfigurasi Docker Compose" || loading_animation "📝 Creating Docker Compose configuration"
+
+    if [ "$MEMORY_LIMIT" = "unlimited" ]; then
+        cat > docker-compose.yml <<EOF
+services:
+  customerportal:
+    image: ${IMAGE}
+    container_name: customerportal
+    ports:
+      - "1998:1998"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - NODE_ENV=production
+      - PORT=1998
+      - PANEL_URL=http://host.docker.internal:1997
+      - PORTAL_API_KEY=${PORTAL_API_KEY}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - WHATSAPP_FORGOT_CODE=1234567890
+      - WHATSAPP_SUPPORT=1234567890
+      - DISPLAY_SSID_24GHZ=1
+      - DISPLAY_SSID_58GHZ=5
+    restart: unless-stopped
+EOF
+    else
+        cat > docker-compose.yml <<EOF
+services:
+  customerportal:
+    image: ${IMAGE}
+    container_name: customerportal
+    deploy:
+      resources:
+        limits:
+          memory: ${MEMORY_LIMIT}M
+    ports:
+      - "1998:1998"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - NODE_ENV=production
+      - PORT=1998
+      - PANEL_URL=http://host.docker.internal:1997
+      - PORTAL_API_KEY=${PORTAL_API_KEY}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - WHATSAPP_FORGOT_CODE=1234567890
+      - WHATSAPP_SUPPORT=1234567890
+      - DISPLAY_SSID_24GHZ=1
+      - DISPLAY_SSID_58GHZ=5
+    restart: unless-stopped
+EOF
+    fi
+
+    echo ""; echo "========================================================="; [ "$LANG_CODE" = "id" ] && animated_text "🐳 Memulai Docker Compose..." 0.08 || animated_text "🐳 Starting Docker Compose..." 0.08; echo "========================================================="; echo ""
+
+    if docker compose up -d; then COMPOSE_SUCCESS=true; elif docker-compose up -d; then COMPOSE_SUCCESS=true; else COMPOSE_SUCCESS=false; fi
+
+    echo ""; echo "========================================================="
+    if [ "$COMPOSE_SUCCESS" = true ]; then
+        [ "$LANG_CODE" = "id" ] && print_success "🎉 Docker Compose berhasil dijalankan!" || print_success "🎉 Docker Compose started successfully!"
+    else
+        [ "$LANG_CODE" = "id" ] && print_error "❌ Gagal menjalankan Docker Compose" || print_error "❌ Failed to start Docker Compose"
+        return 1
+    fi
+    echo "========================================================="; echo ""
+
+    [ "$LANG_CODE" = "id" ] && show_progress_bar 25 "⏳ Menunggu container siap..." || show_progress_bar 25 "⏳ Waiting for container to be ready..."
+
+    if docker ps | grep -q customerportal; then
+        [ "$LANG_CODE" = "id" ] && print_success "✅ Customer Portal berhasil diinstall dan berjalan!" || print_success "✅ Customer Portal installed and running successfully!"
+        SERVER_IP=$(get_server_ip)
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════╗"
+        [ "$LANG_CODE" = "id" ] && echo "║                    INSTALASI SELESAI!                   ║" || echo "║                  INSTALLATION COMPLETE!                 ║"
+        echo "╠══════════════════════════════════════════════════════════╣"
+        echo "║  🌐 URL Portal: http://${SERVER_IP}:1998"
+        echo "║  🔑 API Key   : ${PORTAL_API_KEY:0:20}..."
+        [ "$LANG_CODE" = "id" ] && echo "║  📱 WhatsApp  : Sesuaikan di environment variables      ║" || echo "║  📱 WhatsApp  : Configure in environment variables      ║"
+        echo "╚══════════════════════════════════════════════════════════╝"
+        return 0
+    else
+        [ "$LANG_CODE" = "id" ] && print_error "❌ Container gagal berjalan" || print_error "❌ Container failed to start"
+        docker ps -a; docker logs customerportal
+        return 1
+    fi
+}
+
+# ============================================================
+# UNINSTALL CUSTOMER PORTAL
+# ============================================================
+uninstall_customer_portal() {
+    show_installation_header
+    [ "$LANG_CODE" = "id" ] && animated_text "⚠️  PERINGATAN: Ini akan menghapus Customer Portal!" 0.05 || animated_text "⚠️  WARNING: This will remove Customer Portal!" 0.05
+    [ "$LANG_CODE" = "id" ] && read -p "Apakah Anda yakin? (y/n): " confirm || read -p "Are you sure? (y/n): " confirm
+    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { [ "$LANG_CODE" = "id" ] && print_info "Uninstall dibatalkan" || print_info "Uninstall cancelled"; return 1; }
+
+    echo ""; echo "========================================================="; [ "$LANG_CODE" = "id" ] && animated_text "🗑️  Memulai proses uninstall Customer Portal..." 0.08 || animated_text "🗑️  Starting Customer Portal uninstall process..." 0.08; echo "========================================================="; echo ""
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🛑 Menghentikan dan menghapus container" || loading_animation "🛑 Stopping and removing container"
+    docker stop customerportal 2>/dev/null; docker rm customerportal 2>/dev/null
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🐳 Menghapus Docker image" || loading_animation "🐳 Removing Docker image"
+    docker rmi solusidigitalnet/customerportal:latest 2>&1 | grep -v "No such image" || true
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📁 Menghapus direktori Customer Portal" || loading_animation "📁 Removing Customer Portal directory"
+    rm -rf /root/customerportal
+
+    if [ "$(check_ufw_status)" = "active" ]; then
+        echo ""
+        [ "$LANG_CODE" = "id" ] && read -p "Hapus rules firewall Customer Portal? (y/n): " remove_fw || read -p "Remove Customer Portal firewall rules? (y/n): " remove_fw
+        if [ "$remove_fw" = "y" ] || [ "$remove_fw" = "Y" ]; then
+            [ "$LANG_CODE" = "id" ] && loading_animation "🔥 Menghapus rules firewall" || loading_animation "🔥 Removing firewall rules"
+            ufw delete allow 1998/tcp 2>/dev/null; ufw reload &> /dev/null
+            [ "$LANG_CODE" = "id" ] && print_success "✅ Rules firewall berhasil dihapus" || print_success "✅ Firewall rules removed successfully"
+        fi
+    fi
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🧹 Membersihkan sistem" || loading_animation "🧹 Cleaning up system"
+    command -v docker &> /dev/null && docker system prune -f
+
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════╗"
+    [ "$LANG_CODE" = "id" ] && echo "║                    UNINSTALL SELESAI!                   ║" || echo "║                  UNINSTALL COMPLETE!                    ║"
+    [ "$LANG_CODE" = "id" ] && echo "║          Customer Portal berhasil dihapus! ✅            ║" || echo "║        Customer Portal successfully removed! ✅          ║"
+    echo "╚══════════════════════════════════════════════════════════╝"
+    return 0
+}
+
+# ============================================================
+# SHOW STATUS
+# ============================================================
+show_status() {
+    show_installation_header
+    [ "$LANG_CODE" = "id" ] && animated_text "📊 Memeriksa status layanan GenieACS..." 0.05 || animated_text "📊 Checking GenieACS services status..." 0.05
+
+    show_system_info
+    SERVER_IP=$(get_server_ip)
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🐳 Memeriksa status Docker" || loading_animation "🐳 Checking Docker status"
+
+    if command -v docker &> /dev/null; then
+        [ "$LANG_CODE" = "id" ] && print_success "✅ Docker: Terinstall" || print_success "✅ Docker: Installed"
+        docker --version
+        docker compose version &> /dev/null && docker compose version || (docker-compose --version &> /dev/null && docker-compose --version)
+
+        echo ""
+        [ "$LANG_CODE" = "id" ] && loading_animation "📋 Memeriksa status container" || loading_animation "📋 Checking container status"
+        echo ""
+        echo "========================================"
+        [ "$LANG_CODE" = "id" ] && echo "         STATUS CONTAINER" || echo "         CONTAINER STATUS"
+        echo "========================================"
+
+        if docker inspect genieacs >/dev/null 2>&1 && [ "$(docker inspect -f '{{.State.Running}}' genieacs 2>/dev/null)" = "true" ]; then
+            [ "$LANG_CODE" = "id" ] && print_success "✅ GenieACS: Berjalan" || print_success "✅ GenieACS: Running"
+            echo "  🌐 URL: http://${SERVER_IP}:3000"
+            echo "  👤 admin / admin"
+            [ "$LANG_CODE" = "id" ] && echo "  🔌 Port: 3000, 7547, 7557, 7567" || echo "  🔌 Ports: 3000, 7547, 7557, 7567"
+        else
+            [ "$LANG_CODE" = "id" ] && print_warning "⚠️  GenieACS: Tidak Berjalan" || print_warning "⚠️  GenieACS: Not Running"
+        fi
+
+        echo ""
+
+        if docker inspect genieacs-panel-api >/dev/null 2>&1 && [ "$(docker inspect -f '{{.State.Running}}' genieacs-panel-api 2>/dev/null)" = "true" ]; then
+            [ "$LANG_CODE" = "id" ] && print_success "✅ GenieACS Panel: Berjalan" || print_success "✅ GenieACS Panel: Running"
+            echo "  🌐 URL: http://${SERVER_IP}:1997"
+            echo "  👤 admin / solusidigitalnet"
+            [ "$LANG_CODE" = "id" ] && echo "  🔌 Port: 1997" || echo "  🔌 Port: 1997"
+        else
+            [ "$LANG_CODE" = "id" ] && print_warning "⚠️  GenieACS Panel: Tidak Berjalan" || print_warning "⚠️  GenieACS Panel: Not Running"
+        fi
+
+        echo ""
+
+        if docker inspect customerportal >/dev/null 2>&1 && [ "$(docker inspect -f '{{.State.Running}}' customerportal 2>/dev/null)" = "true" ]; then
+            [ "$LANG_CODE" = "id" ] && print_success "✅ Customer Portal: Berjalan" || print_success "✅ Customer Portal: Running"
+            echo "  🌐 URL: http://${SERVER_IP}:1998"
+            [ "$LANG_CODE" = "id" ] && echo "  🔌 Port: 1998" || echo "  🔌 Port: 1998"
+        else
+            [ "$LANG_CODE" = "id" ] && print_warning "⚠️  Customer Portal: Tidak Berjalan" || print_warning "⚠️  Customer Portal: Not Running"
+        fi
+
+        RUNNING_CONTAINERS=$(docker ps -q 2>/dev/null | wc -l)
+        if [ "$RUNNING_CONTAINERS" -gt 0 ]; then
+            echo ""
+            [ "$LANG_CODE" = "id" ] && loading_animation "📈 Mengumpulkan statistik resource usage" || loading_animation "📈 Collecting resource usage statistics"
+            echo ""
+            echo "========================================"
+            echo "      RESOURCE USAGE (DOCKER STATS)"
+            echo "========================================"
+            echo ""
+            timeout 10 docker stats --no-stream 2>/dev/null || { [ "$LANG_CODE" = "id" ] && print_warning "⚠️  Tidak dapat menampilkan stats" || print_warning "⚠️  Cannot display stats"; }
+        fi
+
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════╗"
+        [ "$LANG_CODE" = "id" ] && echo "║                   STATUS CHECK SELESAI                  ║" || echo "║                  STATUS CHECK COMPLETE                  ║"
+        echo "╚══════════════════════════════════════════════════════════╝"
+    else
+        [ "$LANG_CODE" = "id" ] && print_error "❌ Docker: Tidak Terinstall" || print_error "❌ Docker: Not Installed"
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════╗"
+        echo "║                      DOCKER REQUIRED                    ║"
+        [ "$LANG_CODE" = "id" ] && echo "║  Install Docker terlebih dahulu untuk menggunakan       ║" || echo "║  Please install Docker first to use GenieACS            ║"
+        echo "║  📋 Menu: [1] Docker → [1] Install Docker               ║"
+        echo "╚══════════════════════════════════════════════════════════╝"
+    fi
+}
+
+# ============================================================
+# MENUS
+# ============================================================
+show_menu() {
+    clear
+    echo ""
+    echo "    ███████╗ ██████╗ ██╗     ██╗   ██╗███████╗██╗"
+    echo "    ██╔════╝██╔═══██╗██║     ██║   ██║██╔════╝██║"
+    echo "    ███████╗██║   ██║██║     ██║   ██║███████╗██║"
+    echo "    ╚════██║██║   ██║██║     ██║   ██║╚════██║██║"
+    echo "    ███████║╚██████╔╝███████╗╚██████╔╝███████║██║"
+    echo "    ╚══════╝ ╚═════╝ ╚══════╝ ╚═════╝ ╚══════╝╚═╝"
+    echo ""
+    echo "    ██████╗ ██╗ ██████╗ ██╗████████╗ █████╗ ██╗"
+    echo "    ██╔══██╗██║██╔════╝ ██║╚══██╔══╝██╔══██╗██║"
+    echo "    ██║  ██║██║██║  ███╗██║   ██║   ███████║██║"
+    echo "    ██║  ██║██║██║   ██║██║   ██║   ██╔══██║██║"
+    echo "    ██████╔╝██║╚██████╔╝██║   ██║   ██║  ██║███████╗"
+    echo "    ╚═════╝ ╚═╝ ╚═════╝ ╚═╝   ╚═╝   ╚═╝  ╚═╝╚══════╝"
+    echo ""
+    echo "            ███╗   ██╗███████╗████████╗"
+    echo "            ████╗  ██║██╔════╝╚══██╔══╝"
+    echo "            ██╔██╗ ██║█████╗     ██║"
+    echo "            ██║╚██╗██║██╔══╝     ██║"
+    echo "            ██║ ╚████║███████╗   ██║"
+    echo "            ╚═╝  ╚═══╝╚══════╝   ╚═╝"
+    echo ""
+    echo "========================================================="
+    echo "  $MSG_TITLE v${INSTALLER_VERSION}"
+    echo "  Repo: https://github.com/${GITHUB_USER}/${GITHUB_REPO}"
+    echo "========================================================="
+    echo ""
+    echo "  [1] $MENU_DOCKER"
+    echo "  [2] $MENU_GENIEACS"
+    echo "  [3] $MENU_PANEL"
+    echo "  [4] $MENU_CUSTOMER_PORTAL"
+    echo "  [5] $MENU_STATUS"
+    echo "  [6] $MENU_EXIT"
+    echo ""
+    echo "========================================================="
+}
+
+show_docker_menu() {
+    clear; echo ""; echo "========================================================="; echo "                  $MENU_DOCKER"; echo "========================================================="; echo ""
+    echo "  [1] $SUBMENU_INSTALL_DOCKER"; echo "  [2] $SUBMENU_UNINSTALL_DOCKER"; echo "  [0] $MSG_BACK"; echo ""; echo "========================================================="
+}
+
+show_genieacs_menu() {
+    clear; echo ""; echo "========================================================="; echo "                  $MENU_GENIEACS"; echo "========================================================="; echo ""
+    echo "  [1] $SUBMENU_INSTALL_GENIEACS"; echo "  [2] $SUBMENU_CONFIG_GENIEACS"; echo "  [3] $SUBMENU_UNINSTALL_GENIEACS"; echo "  [0] $MSG_BACK"; echo ""; echo "========================================================="
+}
+
+show_panel_menu() {
+    clear; echo ""; echo "========================================================="; echo "                  $MENU_PANEL"; echo "========================================================="; echo ""
+    echo "  [1] $SUBMENU_INSTALL_PANEL"; echo "  [2] $SUBMENU_UNINSTALL_PANEL"; echo "  [0] $MSG_BACK"; echo ""; echo "========================================================="
+}
+
+show_customer_portal_menu() {
+    clear; echo ""; echo "========================================================="; echo "                  $MENU_CUSTOMER_PORTAL"; echo "========================================================="; echo ""
+    echo "  [1] $SUBMENU_INSTALL_CUSTOMER_PORTAL"; echo "  [2] $SUBMENU_UNINSTALL_CUSTOMER_PORTAL"; echo "  [0] $MSG_BACK"; echo ""; echo "========================================================="
+}
+
+docker_menu() {
+    while true; do
+        show_docker_menu
+        read -p "$MSG_CHOOSE (0-2): " choice
+        case $choice in
+            1) install_docker && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            2) uninstall_docker && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            0) return;;
+            *) print_error "$MSG_INVALID_CHOICE"; read -p "$MSG_PRESS_ENTER";;
+        esac
+    done
+}
+
+genieacs_menu() {
+    while true; do
+        show_genieacs_menu
+        read -p "$MSG_CHOOSE (0-3): " choice
+        case $choice in
+            1) install_genieacs && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            2) configure_genieacs && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            3) uninstall_genieacs && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            0) return;;
+            *) print_error "$MSG_INVALID_CHOICE"; read -p "$MSG_PRESS_ENTER";;
+        esac
+    done
+}
+
+panel_menu() {
+    while true; do
+        show_panel_menu
+        read -p "$MSG_CHOOSE (0-2): " choice
+        case $choice in
+            1) install_genieacs_panel && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            2) uninstall_genieacs_panel && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            0) return;;
+            *) print_error "$MSG_INVALID_CHOICE"; read -p "$MSG_PRESS_ENTER";;
+        esac
+    done
+}
+
+customer_portal_menu() {
+    while true; do
+        show_customer_portal_menu
+        read -p "$MSG_CHOOSE (0-2): " choice
+        case $choice in
+            1) install_customer_portal && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            2) uninstall_customer_portal && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            0) return;;
+            *) print_error "$MSG_INVALID_CHOICE"; read -p "$MSG_PRESS_ENTER";;
+        esac
+    done
+}
+
+main() {
+    while true; do
+        show_menu
+        read -p "$MSG_CHOOSE (1-6): " choice
+        case $choice in
+            1) docker_menu;;
+            2) genieacs_menu;;
+            3) panel_menu;;
+            4) customer_portal_menu;;
+            5) show_status; read -p "$MSG_PRESS_ENTER";;
+            6) print_info "$MSG_THANK_YOU"; exit 0;;
+            *) print_error "$MSG_INVALID_CHOICE"; read -p "$MSG_PRESS_ENTER";;
+        esac
+    done
+}
+
+# ============================================================
+# ROOT CHECK
+# ============================================================
+if [ "$EUID" -ne 0 ]; then
+    clear; echo ""
+    echo "========================================================="
+    [ "$LANG_CODE" = "id" ] && echo -e "${RED}ERROR: Script harus dijalankan sebagai ROOT!${NC}" || echo -e "${RED}ERROR: Script must be run as ROOT!${NC}"
+    echo "========================================================="
+    echo ""
+    if [ "$LANG_CODE" = "id" ]; then
+        echo "Gunakan salah satu cara berikut:"
+        echo "  1. sudo bash $0"
+        echo "  2. su - root, lalu jalankan: bash $0"
+        echo ""
+        echo "Atau install langsung via:"
+    else
+        echo "Use one of the following methods:"
+        echo "  1. sudo bash $0"
+        echo "  2. su - root, then run: bash $0"
+        echo ""
+        echo "Or install directly via:"
+    fi
+    echo "  bash <(curl -fsSL https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}/install.sh)"
+    echo ""
+    echo "========================================================="
+    echo ""
+    exit 1
+fi
+
+main
