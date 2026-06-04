@@ -73,19 +73,6 @@ DidotsServ/
 
 ---
 
-## 🔧 Cara Install Manual (Alternatif)
-
-```bash
-# Clone repo
-git clone https://github.com/zlabkeeb/DidotsServ.git
-cd DidotsServ
-
-# Jalankan installer
-sudo bash install.sh
-```
-
----
-
 ## 📝 Catatan Konfigurasi
 
 Setelah install GenieACS, akses UI di:
