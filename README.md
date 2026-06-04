@@ -1,65 +1,81 @@
-# DidotsServ — GenieACS Installer
+<div align="center">
 
-<p align="center">
-  <img src="https://img.shields.io/badge/version-5.5-blue" />
-  <img src="https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-informational" />
-  <img src="https://img.shields.io/badge/arch-amd64%20%7C%20arm64%20%7C%20armhf-success" />
-  <img src="https://img.shields.io/badge/language-Bash-orange" />
-</p>
+```
+██████╗ ██╗██████╗  ██████╗ ████████╗███████╗
+██╔══██╗██║██╔══██╗██╔═══██╗╚══██╔══╝██╔════╝
+██║  ██║██║██║  ██║██║   ██║   ██║   ███████╗
+██║  ██║██║██║  ██║██║   ██║   ██║   ╚════██║
+██████╔╝██║██████╔╝╚██████╔╝   ██║   ███████║
+╚═════╝ ╚═╝╚═════╝  ╚═════╝   ╚═╝   ╚══════╝
+```
 
-Script installer interaktif untuk **GenieACS**, **GenieACS Panel**, dan **Customer Portal** berbasis Docker.
+**toolkit pribadi buat deploy ACS stack — cepat, bersih, no drama** ☕
+
+<br>
+
+![version](https://img.shields.io/badge/v5.5-brightgreen?style=flat-square&logo=github)
+![platform](https://img.shields.io/badge/Ubuntu%20%7C%20Debian-4A90D9?style=flat-square&logo=linux&logoColor=white)
+![arch](https://img.shields.io/badge/amd64%20%7C%20arm64%20%7C%20armhf-orange?style=flat-square)
+![lang](https://img.shields.io/badge/bash-121011?style=flat-square&logo=gnu-bash&logoColor=white)
+![docker](https://img.shields.io/badge/docker-2496ED?style=flat-square&logo=docker&logoColor=white)
+
+</div>
 
 ---
 
-## 🚀 Cara Install (Satu Perintah)
+## ⚡ One-liner install
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/zlabkeeb/DidotsServ/main/install.sh)
 ```
 
-> Jalankan sebagai **root** atau dengan `sudo`.
+> Jalankan sebagai **root** atau pakai `sudo`. Udah, segitu aja.
 
 ---
 
-## 📋 Fitur
+## 🧩 Apa aja yang bisa di-install
 
-| Menu | Keterangan |
-|------|-----------|
-| 🐳 Docker | Install / Uninstall Docker & Docker Compose |
-| 🚀 GenieACS | Install / Konfigurasi DB / Uninstall GenieACS |
-| 🖥️ GenieACS Panel | Install / Uninstall GenieACS Panel |
-| 🌐 Customer Portal | Install / Uninstall Customer Portal |
-| 📊 Status | Lihat status semua layanan yang berjalan |
-
----
-
-## 🔌 Port yang Digunakan
-
-| Layanan | Port |
-|---------|------|
-| GenieACS UI | 3000 |
-| GenieACS CWMP | 7547 |
-| GenieACS NBI | 7557 |
-| GenieACS FS | 7567 |
-| GenieACS Panel | 1997 |
-| Customer Portal | 1998 |
+| | Menu | Keterangan |
+|--|------|------------|
+| 🐳 | **Docker** | Install / uninstall Docker + Compose |
+| 🚀 | **ACS Core** | Install, konfigurasi DB, atau uninstall |
+| 🖥️ | **ACS Panel** | Panel manajemen berbasis web |
+| 🌐 | **Customer Portal** | Portal pelanggan self-service |
+| 📊 | **Status** | Cek semua layanan sekaligus |
 
 ---
 
-## 🖥️ Sistem yang Didukung
+## 🔌 Port map
 
-- **OS**: Ubuntu (20.04, 22.04, 24.04), Debian (10, 11, 12), Armbian, Raspberry Pi OS
-- **Arsitektur**: `amd64`, `arm64`, `armhf`
-- **Environment**: Native Linux, WSL2
+```
+┌─────────────────────────┬────────┐
+│ Layanan                 │  Port  │
+├─────────────────────────┼────────┤
+│ ACS UI                  │  3000  │
+│ ACS CWMP                │  7547  │
+│ ACS NBI                 │  7557  │
+│ ACS FS                  │  7567  │
+│ ACS Panel               │  1997  │
+│ Customer Portal         │  1998  │
+└─────────────────────────┴────────┘
+```
 
 ---
 
-## 📁 Struktur Repository
+## 🖥️ Environment yang didukung
+
+- **OS** — Ubuntu 20.04 / 22.04 / 24.04 · Debian 10 / 11 / 12 · Armbian · Raspberry Pi OS
+- **Arch** — `amd64` · `arm64` · `armhf`
+- **Mode** — Native Linux, WSL2
+
+---
+
+## 📁 Struktur repo
 
 ```
 DidotsServ/
-├── install.sh          # Script installer utama
-├── db/                 # File database GenieACS (BSON + metadata)
+├── install.sh               ← entry point
+├── db/                      ← seed data ACS (BSON)
 │   ├── cache.bson
 │   ├── config.bson
 │   ├── permissions.bson
@@ -73,27 +89,38 @@ DidotsServ/
 
 ---
 
-## 📝 Catatan Konfigurasi
+## 🔐 Default credentials
 
-Setelah install GenieACS, akses UI di:
+<table>
+<tr>
+<td>
+
+**ACS UI** — `:3000`
 ```
-http://<IP-SERVER>:3000
-Username: admin
-Password: admin
+user : admin
+pass : admin
 ```
 
-Setelah install GenieACS Panel:
+</td>
+<td>
+
+**ACS Panel** — `:1997`
 ```
-http://<IP-SERVER>:1997
-Username: admin
-Password: solusidigitalnet
+user : admin
+pass : solusidigitalnet
 ```
+
+</td>
+</tr>
+</table>
+
+> ⚠️ Ganti password setelah login pertama, jangan sampe lupa.
 
 ---
 
-## 🔄 Update Script
+## 🔄 Update
 
-Untuk update ke versi terbaru, cukup jalankan ulang perintah install:
+Jalanin ulang perintah yang sama, otomatis pull versi terbaru:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/zlabkeeb/DidotsServ/main/install.sh)
@@ -101,8 +128,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/zlabkeeb/DidotsServ/main/ins
 
 ---
 
-## ⚠️ Persyaratan
-
-- RAM minimum: **21 GB** (4 GB disarankan)
-- Storage minimum: **10 GB**
-- Koneksi internet aktif saat instalasi
+<div align="center">
+<sub>· solusidigitalnet · 2025</sub>
+</div>
