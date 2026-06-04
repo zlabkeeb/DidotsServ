@@ -9,7 +9,7 @@
 ╚═════╝ ╚═╝╚═════╝  ╚═════╝   ╚═╝   ╚══════╝
 ```
 
-**toolkit pribadi buat deploy ACS stack — cepat, bersih, no drama** ☕
+**toolkit deploy ACS stack — cepat, bersih, no drama** ☕
 
 <br>
 
