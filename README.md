@@ -118,16 +118,6 @@ pass : solusidigitalnet
 
 ---
 
-## 🔄 Update
-
-Jalanin ulang perintah yang sama, otomatis pull versi terbaru:
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/zlabkeeb/DidotsServ/main/install.sh)
-```
-
----
-
 <div align="center">
 <sub>· solusidigitalnet · 2025</sub>
 </div>
