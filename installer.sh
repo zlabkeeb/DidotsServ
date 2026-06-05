@@ -2359,7 +2359,6 @@ show_menu() {
     echo ""
     echo "========================================================="
     echo "  $MSG_TITLE v${INSTALLER_VERSION}"
-    echo "  Repo: https://github.com/${GITHUB_USER}/${GITHUB_REPO}"
     echo "========================================================="
     echo ""
     echo "  [1] $MENU_DOCKER"
