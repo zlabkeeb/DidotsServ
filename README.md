@@ -44,6 +44,67 @@ bash <(curl -fsSL https://raw.githubusercontent.com/zlabkeeb/DidotsServ/main/ins
 
 ---
 
+## 🖥️ Preview menu
+
+```
+  Interactive Installer v5.6
+  Repo: https://github.com/zlabkeeb/DidotsServ
+
+  [1] Docker
+  [2] GenieACS
+  [3] GenieACS Panel
+  [4] Customer Portal
+  [5] Lihat Status
+  [6] Keluar
+
+Pilih menu (1-6):
+```
+
+### Submenu
+
+**Docker**
+```
+                  Docker
+
+  [1] Install Docker dan Docker Compose
+  [2] Uninstall Docker dan Docker Compose
+  [0] Kembali
+
+```
+
+**GenieACS**
+```
+                  GenieACS
+
+  [1] Install GenieACS
+  [2] Konfigurasi DB GenieACS
+  [3] Uninstall GenieACS
+  [0] Kembali
+
+```
+
+**GenieACS Panel**
+```
+                  GenieACS Panel
+
+  [1] Install GenieACS Panel
+  [2] Uninstall GenieACS Panel
+  [0] Kembali
+
+```
+
+**Customer Portal**
+```
+                  Customer Portal
+
+  [1] Install Customer Portal
+  [2] Uninstall Customer Portal
+  [0] Kembali
+
+```
+
+---
+
 ## 🧩 Apa aja yang bisa di-install
 
 | | Menu | Keterangan |
