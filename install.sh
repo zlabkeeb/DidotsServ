@@ -1,8 +1,6 @@
 #!/bin/bash
-
-# GenieACS Installer Script
-# Description: Interactive installer for GenieACS with Docker
-# Repository : https://github.com/zlabkeeb/DidotsServ
+# Docker Hub account
+DOCKER_HUB_USER="solusidigitalnet"
 
 # ============================================================
 # CONFIGURATION - GitHub Repository
@@ -13,7 +11,7 @@ GITHUB_BRANCH="main"
 GITHUB_RAW_BASE="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}"
 DB_URL="${GITHUB_RAW_BASE}/db"
 
-INSTALLER_VERSION="5.5"
+INSTALLER_VERSION="5.6"
 
 # Detect system language
 LANG_CODE="${LANG:0:2}"
@@ -34,14 +32,37 @@ case $LANG_CODE in
         MSG_THANK_YOU="Terima kasih telah menggunakan Installer!"
         MSG_PROCESS_COMPLETE="Proses selesai!"
         MSG_PROCESS_FAILED="Proses gagal! Silakan periksa error di atas."
-        
+
+        PREFLIGHT_TITLE="CEK KESIAPAN SISTEM"
+        PREFLIGHT_CHECKING="Memeriksa kesiapan sistem..."
+        PREFLIGHT_OS="Sistem Operasi"
+        PREFLIGHT_ARCH="Arsitektur"
+        PREFLIGHT_RAM="Total RAM"
+        PREFLIGHT_DISK="Disk tersedia di /root"
+        PREFLIGHT_INTERNET="Koneksi internet"
+        PREFLIGHT_DEPS="Dependencies"
+        PREFLIGHT_DOCKER="Docker"
+        PREFLIGHT_PASS="LOLOS"
+        PREFLIGHT_FAIL="GAGAL"
+        PREFLIGHT_INSTALL_DOCKER_PROMPT="Docker belum terinstall. Install Docker sekarang?"
+        DOCKER_LOGIN_TITLE="LOGIN DOCKER HUB"
+        DOCKER_LOGIN_PROMPT="Masukkan Access Token Docker Hub"
+        DOCKER_LOGIN_SUCCESS="Login Docker Hub berhasil"
+        DOCKER_LOGIN_FAILED="Login Docker Hub gagal"
+        DOCKER_LOGIN_RETRY="Percobaan login gagal, coba lagi"
+        DOCKER_LOGIN_EXIT="Gagal login setelah 3 percobaan. Keluar."
+        DOCKER_LOGOUT="Logout dari Docker Hub"
+        DOCKER_LOGOUT_DONE="Berhasil logout dari Docker Hub"
+        DOCKER_LOGOUT_NONE="Tidak ada sesi Docker Hub untuk di-logout"
+        EXIT_MESSAGE="Keluar dari installer"
+
         MENU_DOCKER="Docker"
         MENU_GENIEACS="GenieACS"
         MENU_PANEL="GenieACS Panel"
         MENU_CUSTOMER_PORTAL="Customer Portal"
         MENU_STATUS="Lihat Status"
         MENU_EXIT="Keluar"
-        
+
         SUBMENU_INSTALL_DOCKER="Install Docker dan Docker Compose"
         SUBMENU_UNINSTALL_DOCKER="Uninstall Docker dan Docker Compose"
         SUBMENU_INSTALL_GENIEACS="Install GenieACS"
@@ -66,14 +87,37 @@ case $LANG_CODE in
         MSG_THANK_YOU="Thank you for using Installer!"
         MSG_PROCESS_COMPLETE="Process completed!"
         MSG_PROCESS_FAILED="Process failed! Please check the error above."
-        
+
+        PREFLIGHT_TITLE="SYSTEM READINESS CHECK"
+        PREFLIGHT_CHECKING="Checking system readiness..."
+        PREFLIGHT_OS="Operating System"
+        PREFLIGHT_ARCH="Architecture"
+        PREFLIGHT_RAM="Total RAM"
+        PREFLIGHT_DISK="Disk available at /root"
+        PREFLIGHT_INTERNET="Internet connection"
+        PREFLIGHT_DEPS="Dependencies"
+        PREFLIGHT_DOCKER="Docker"
+        PREFLIGHT_PASS="PASS"
+        PREFLIGHT_FAIL="FAIL"
+        PREFLIGHT_INSTALL_DOCKER_PROMPT="Docker is not installed. Install Docker now?"
+        DOCKER_LOGIN_TITLE="DOCKER HUB LOGIN"
+        DOCKER_LOGIN_PROMPT="Enter Docker Hub Access Token"
+        DOCKER_LOGIN_SUCCESS="Docker Hub login successful"
+        DOCKER_LOGIN_FAILED="Docker Hub login failed"
+        DOCKER_LOGIN_RETRY="Login attempt failed, please try again"
+        DOCKER_LOGIN_EXIT="Failed to login after 3 attempts. Exiting."
+        DOCKER_LOGOUT="Logging out from Docker Hub"
+        DOCKER_LOGOUT_DONE="Successfully logged out from Docker Hub"
+        DOCKER_LOGOUT_NONE="No Docker Hub session to logout"
+        EXIT_MESSAGE="Exiting installer"
+
         MENU_DOCKER="Docker"
         MENU_GENIEACS="GenieACS"
         MENU_PANEL="GenieACS Panel"
         MENU_CUSTOMER_PORTAL="Customer Portal"
         MENU_STATUS="View Status"
         MENU_EXIT="Exit"
-        
+
         SUBMENU_INSTALL_DOCKER="Install Docker and Docker Compose"
         SUBMENU_UNINSTALL_DOCKER="Uninstall Docker and Docker Compose"
         SUBMENU_INSTALL_GENIEACS="Install GenieACS"
@@ -385,6 +429,208 @@ check_system_compatibility() {
 get_available_ram() { free -m | awk 'NR==2{print $7}'; }
 get_total_ram()     { free -m | awk 'NR==2{print $2}'; }
 
+# ============================================================
+# PREFLIGHT CHECK
+# ============================================================
+preflight_check() {
+    show_installation_header
+    [ "$LANG_CODE" = "id" ] && animated_text "🔍 $PREFLIGHT_CHECKING" 0.05 || animated_text "🔍 $PREFLIGHT_CHECKING" 0.05
+
+    local fatal=0
+    local check_name check_value check_status
+
+    echo ""
+    echo "========================================================="
+    echo "                  $PREFLIGHT_TITLE"
+    echo "========================================================="
+    echo ""
+
+    # OS
+    OS_INFO=$(detect_os)
+    IFS=':' read -r OS OS_VERSION OS_CODENAME IS_WSL DOCKER_BASE_OS <<< "$OS_INFO"
+    if [ "$OS" != "unknown" ]; then
+        check_value="$OS $OS_VERSION ($OS_CODENAME)"
+        check_status="$PREFLIGHT_PASS"
+    else
+        check_value="$OS"
+        check_status="$PREFLIGHT_FAIL"
+        fatal=$((fatal + 1))
+    fi
+    printf "  %-30s %-25s [ %s ]\n" "$PREFLIGHT_OS" "$check_value" "$check_status"
+
+    # Architecture
+    ARCH=$(detect_architecture)
+    if [ "$ARCH" != "unknown" ]; then
+        check_value="$ARCH"
+        check_status="$PREFLIGHT_PASS"
+    else
+        check_value="$(uname -m)"
+        check_status="$PREFLIGHT_FAIL"
+        fatal=$((fatal + 1))
+    fi
+    printf "  %-30s %-25s [ %s ]\n" "$PREFLIGHT_ARCH" "$check_value" "$check_status"
+
+    # RAM
+    TOTAL_RAM=$(get_total_ram)
+    if [ -n "$TOTAL_RAM" ] && [ "$TOTAL_RAM" -ge 2048 ] 2>/dev/null; then
+        check_value="${TOTAL_RAM} MB"
+        check_status="$PREFLIGHT_PASS"
+    else
+        check_value="${TOTAL_RAM:-0} MB (< 2048 MB)"
+        check_status="$PREFLIGHT_FAIL"
+        fatal=$((fatal + 1))
+        [ "$LANG_CODE" = "id" ] && print_error "RAM minimum 2048 MB diperlukan" || print_error "Minimum 2048 MB RAM is required"
+    fi
+    printf "  %-30s %-25s [ %s ]\n" "$PREFLIGHT_RAM" "$check_value" "$check_status"
+
+    # Disk
+    local root_avail
+    root_avail=$(df -m /root 2>/dev/null | awk 'NR==2{print $4}')
+    [ -z "$root_avail" ] && root_avail=$(df -m / 2>/dev/null | awk 'NR==2{print $4}')
+    if [ -n "$root_avail" ] && [ "$root_avail" -ge 2048 ] 2>/dev/null; then
+        check_value="${root_avail} MB"
+        check_status="$PREFLIGHT_PASS"
+    else
+        check_value="${root_avail:-0} MB (< 2048 MB)"
+        check_status="$PREFLIGHT_FAIL"
+        fatal=$((fatal + 1))
+    fi
+    printf "  %-30s %-25s [ %s ]\n" "$PREFLIGHT_DISK" "$check_value" "$check_status"
+
+    # Internet (multi-endpoint check for reliability)
+    local internet_ok=false
+    local endpoints=("https://hub.docker.com/" "https://www.google.com/" "https://www.cloudflare.com/")
+    for endpoint in "${endpoints[@]}"; do
+        if curl -fsSL --max-time 10 "$endpoint" > /dev/null 2>&1; then
+            internet_ok=true
+            break
+        fi
+    done
+    if [ "$internet_ok" = true ]; then
+        check_value="OK"
+        check_status="$PREFLIGHT_PASS"
+    else
+        check_value="No connection"
+        check_status="$PREFLIGHT_FAIL"
+        fatal=$((fatal + 1))
+    fi
+    printf "  %-30s %-25s [ %s ]\n" "$PREFLIGHT_INTERNET" "$check_value" "$check_status"
+
+    # Dependencies
+    local deps=("curl" "openssl" "gpg" "awk" "free" "df" "fuser")
+    local missing_deps=()
+    for dep in "${deps[@]}"; do
+        command -v "$dep" &> /dev/null || missing_deps+=("$dep")
+    done
+    if [ ${#missing_deps[@]} -eq 0 ]; then
+        check_value="OK"
+        check_status="$PREFLIGHT_PASS"
+    else
+        check_value="missing: ${missing_deps[*]}"
+        check_status="$PREFLIGHT_FAIL"
+        [ "$LANG_CODE" = "id" ] && print_warning "Menginstall dependencies yang kurang..." || print_warning "Installing missing dependencies..."
+        safe_apt_get apt-get update && safe_apt_get apt-get install -y curl openssl gnupg coreutils procps psmisc
+        # Re-check
+        missing_deps=()
+        for dep in "${deps[@]}"; do
+            command -v "$dep" &> /dev/null || missing_deps+=("$dep")
+        done
+        if [ ${#missing_deps[@]} -eq 0 ]; then
+            check_value="OK"
+            check_status="$PREFLIGHT_PASS"
+        else
+            check_value="still missing: ${missing_deps[*]}"
+            check_status="$PREFLIGHT_FAIL"
+            fatal=$((fatal + 1))
+        fi
+    fi
+    printf "  %-30s %-25s [ %s ]\n" "$PREFLIGHT_DEPS" "$check_value" "$check_status"
+
+    # Docker (optional at this stage but reported)
+    if command -v docker &> /dev/null && docker info &> /dev/null; then
+        check_value="OK"
+        check_status="$PREFLIGHT_PASS"
+    elif command -v docker &> /dev/null; then
+        check_value="installed, not running"
+        check_status="$PREFLIGHT_FAIL"
+    else
+        check_value="not installed"
+        check_status="$PREFLIGHT_FAIL"
+    fi
+    printf "  %-30s %-25s [ %s ]\n" "$PREFLIGHT_DOCKER" "$check_value" "$check_status"
+
+    echo ""
+    echo "========================================================="
+
+    if [ $fatal -gt 0 ]; then
+        [ "$LANG_CODE" = "id" ] && print_error "$fatal cek kesiapan gagal. Installer dihentikan." || print_error "$fatal readiness checks failed. Installer aborted."
+        echo "========================================================="
+        echo ""
+        return 1
+    fi
+
+    [ "$LANG_CODE" = "id" ] && print_success "Semua cek kesiapan lolos!" || print_success "All readiness checks passed!"
+    echo "========================================================="
+    echo ""
+    return 0
+}
+
+# ============================================================
+# DOCKER HUB LOGIN / LOGOUT
+# ============================================================
+dockerhub_login() {
+    show_installation_header
+    [ "$LANG_CODE" = "id" ] && animated_text "🔐 $DOCKER_LOGIN_TITLE" 0.05 || animated_text "🔐 $DOCKER_LOGIN_TITLE" 0.05
+
+    echo ""
+    echo "========================================================="
+    echo "                  $DOCKER_LOGIN_TITLE"
+    echo "========================================================="
+    echo ""
+    local attempts=0
+    local max_attempts=3
+
+    while [ $attempts -lt $max_attempts ]; do
+        local token
+        read -p "${DOCKER_LOGIN_PROMPT}: " token
+
+        if [ -z "$token" ]; then
+            [ "$LANG_CODE" = "id" ] && print_error "Access token tidak boleh kosong" || print_error "Access token cannot be empty"
+            attempts=$((attempts + 1))
+            [ $attempts -lt $max_attempts ] && { [ "$LANG_CODE" = "id" ] && print_warning "$DOCKER_LOGIN_RETRY" || print_warning "$DOCKER_LOGIN_RETRY"; }
+            continue
+        fi
+
+        if echo "$token" | docker login -u "$DOCKER_HUB_USER" --password-stdin &> /dev/null; then
+            DOCKER_HUB_LOGGED_IN=true
+            unset token
+            [ "$LANG_CODE" = "id" ] && print_success "$DOCKER_LOGIN_SUCCESS" || print_success "$DOCKER_LOGIN_SUCCESS"
+            echo "========================================================="
+            echo ""
+            return 0
+        else
+            unset token
+            attempts=$((attempts + 1))
+            [ "$LANG_CODE" = "id" ] && print_error "$DOCKER_LOGIN_FAILED" || print_error "$DOCKER_LOGIN_FAILED"
+            [ $attempts -lt $max_attempts ] && { [ "$LANG_CODE" = "id" ] && print_warning "$DOCKER_LOGIN_RETRY (percobaan $attempts/$max_attempts)" || print_warning "$DOCKER_LOGIN_RETRY (attempt $attempts/$max_attempts)"; }
+        fi
+    done
+
+    [ "$LANG_CODE" = "id" ] && print_error "$DOCKER_LOGIN_EXIT" || print_error "$DOCKER_LOGIN_EXIT"
+    echo "========================================================="
+    echo ""
+    return 1
+}
+
+cleanup_logout() {
+    [ "$DOCKER_HUB_LOGGED_IN" != "true" ] && return 0
+    if command -v docker &> /dev/null; then
+        [ "$LANG_CODE" = "id" ] && print_info "$DOCKER_LOGOUT..." || print_info "$DOCKER_LOGOUT..."
+        docker logout &> /dev/null && { [ "$LANG_CODE" = "id" ] && print_success "$DOCKER_LOGOUT_DONE" || print_success "$DOCKER_LOGOUT_DONE"; }
+    fi
+    DOCKER_HUB_LOGGED_IN=false
+}
+
 choose_memory_limit() {
     local service_name=$1
     local auto_mode=${2:-false}
@@ -392,13 +638,8 @@ choose_memory_limit() {
     RAM_50=$((TOTAL_RAM * 50 / 100))
 
     if [ "$auto_mode" = "true" ]; then
-        if [ $TOTAL_RAM -ge 4096 ]; then
-            [ "$LANG_CODE" = "id" ] && print_info "RAM Sistem: ${TOTAL_RAM} MB - Menggunakan mode Unlimited" >&2 || print_info "System RAM: ${TOTAL_RAM} MB - Using Unlimited mode" >&2
-            echo "unlimited"
-        else
-            [ "$LANG_CODE" = "id" ] && print_info "RAM Sistem: ${TOTAL_RAM} MB - Menggunakan limit 50% (${RAM_50} MB)" >&2 || print_info "System RAM: ${TOTAL_RAM} MB - Using 50% limit (${RAM_50} MB)" >&2
-            echo $RAM_50
-        fi
+        [ "$LANG_CODE" = "id" ] && print_info "RAM Sistem: ${TOTAL_RAM} MB - Menggunakan mode Unlimited" >&2 || print_info "System RAM: ${TOTAL_RAM} MB - Using Unlimited mode" >&2
+        echo "unlimited"
         return
     fi
 
@@ -420,20 +661,15 @@ choose_memory_limit() {
     fi
 
     if [ -z "$ram_choice" ]; then
-        if [ $TOTAL_RAM -ge 4096 ]; then
-            [ "$LANG_CODE" = "id" ] && print_info "Otomatis: Menggunakan Unlimited (RAM ≥ 4GB)" >&2 || print_info "Auto: Using Unlimited (RAM ≥ 4GB)" >&2
-            echo "unlimited"
-        else
-            [ "$LANG_CODE" = "id" ] && print_info "Otomatis: Menggunakan 50% RAM (${RAM_50} MB)" >&2 || print_info "Auto: Using 50% RAM (${RAM_50} MB)" >&2
-            echo $RAM_50
-        fi
+        [ "$LANG_CODE" = "id" ] && print_info "Otomatis: Menggunakan mode Unlimited" >&2 || print_info "Auto: Using Unlimited mode" >&2
+        echo "unlimited"
         return
     fi
 
     case $ram_choice in
         1) echo $RAM_50;;
         2) echo "unlimited";;
-        *) [ "$LANG_CODE" = "id" ] && print_warning "Pilihan tidak valid, menggunakan mode otomatis" >&2 || print_warning "Invalid choice, using auto mode" >&2; choose_memory_limit "$service_name" true;;
+        *) [ "$LANG_CODE" = "id" ] && print_warning "Pilihan tidak valid, menggunakan mode Unlimited" >&2 || print_warning "Invalid choice, using Unlimited mode" >&2; echo "unlimited";;
     esac
 }
 
@@ -504,7 +740,7 @@ install_docker() {
 
     [ "$LANG_CODE" = "id" ] && print_info "Menggunakan repository $DOCKER_BASE_OS untuk Docker..." || print_info "Using $DOCKER_BASE_OS repository for Docker..."
 
-    curl -fsSL $DOCKER_GPG_URL | gpg --dearmor -o /etc/apt/keyrings/docker.gpg || { [ "$LANG_CODE" = "id" ] && print_error "Gagal menambahkan Docker GPG key" || print_error "Failed to add Docker GPG key"; return 1; }
+    curl -fsSL "$DOCKER_GPG_URL" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg || { [ "$LANG_CODE" = "id" ] && print_error "Gagal menambahkan Docker GPG key" || print_error "Failed to add Docker GPG key"; return 1; }
     chmod a+r /etc/apt/keyrings/docker.gpg
 
     [ "$LANG_CODE" = "id" ] && loading_animation "📦 Menambahkan Docker repository ($DOCKER_BASE_OS ${SYSTEM_CODENAME})" || loading_animation "📦 Adding Docker repository ($DOCKER_BASE_OS ${SYSTEM_CODENAME})"
@@ -821,6 +1057,26 @@ EOF
 }
 
 # ============================================================
+# DOWNLOAD HELPER WITH RETRY
+# ============================================================
+download_with_retry() {
+    local file="$1"
+    local url="$2"
+    local max_retries=3
+    local retry=0
+
+    while [ $retry -lt $max_retries ]; do
+        if curl -f -s -L -o "$file" "$url"; then
+            return 0
+        fi
+        retry=$((retry + 1))
+        [ $retry -lt $max_retries ] && sleep 2
+    done
+
+    return 1
+}
+
+# ============================================================
 # CONFIGURE GENIEACS (DB from GitHub Raw)
 # ============================================================
 configure_genieacs() {
@@ -869,10 +1125,10 @@ configure_genieacs() {
 
     local failed=0
     for file in "${DB_FILES[@]}"; do
-        if curl -f -s -L -o "genieacs-db/$file" "${DB_URL}/${file}"; then
+        if download_with_retry "genieacs-db/$file" "${DB_URL}/${file}"; then
             echo "  ✓ $file"
         else
-            [ "$LANG_CODE" = "id" ] && print_error "Gagal mengunduh $file dari ${DB_URL}/${file}" || print_error "Failed to download $file from ${DB_URL}/${file}"
+            [ "$LANG_CODE" = "id" ] && print_error "Gagal mengunduh $file dari ${DB_URL}/${file} setelah 3 percobaan" || print_error "Failed to download $file from ${DB_URL}/${file} after 3 attempts"
             failed=$((failed + 1))
         fi
     done
@@ -1192,6 +1448,23 @@ install_customer_portal() {
             print_error "PORTAL_API_KEY tidak boleh kosong!"
             read -p "PORTAL_API_KEY: " PORTAL_API_KEY
         done
+
+        echo ""
+        echo "Masukkan nomor WhatsApp untuk notifikasi Customer Portal"
+        echo "(contoh: 6281234567890, tanpa 0 di depan, tanpa +):"
+        while true; do
+            read -p "No WhatsApp: " WA_NUMBER
+            WA_NUMBER=$(echo "$WA_NUMBER" | tr -d ' -+')
+            if [[ "$WA_NUMBER" =~ ^[0-9]{9,15}$ ]]; then
+                if [[ "$WA_NUMBER" =~ ^0 ]]; then
+                    print_error "Format salah! Jangan pakai 0 di depan. Gunakan kode negara. Contoh: 6281234567890"
+                else
+                    break
+                fi
+            else
+                print_error "Format salah! Hanya angka, tanpa +, tanpa 0 di depan. Contoh: 6281234567890"
+            fi
+        done
     else
         print_info "Customer Portal Configuration:"
         echo "Enter PORTAL_API_KEY from Panel Settings:"
@@ -1199,6 +1472,23 @@ install_customer_portal() {
         while [ -z "$PORTAL_API_KEY" ]; do
             print_error "PORTAL_API_KEY cannot be empty!"
             read -p "PORTAL_API_KEY: " PORTAL_API_KEY
+        done
+
+        echo ""
+        echo "Enter WhatsApp number for Customer Portal notifications"
+        echo "(e.g. 6281234567890, no leading 0, no +):"
+        while true; do
+            read -p "WhatsApp number: " WA_NUMBER
+            WA_NUMBER=$(echo "$WA_NUMBER" | tr -d ' -+')
+            if [[ "$WA_NUMBER" =~ ^[0-9]{9,15}$ ]]; then
+                if [[ "$WA_NUMBER" =~ ^0 ]]; then
+                    print_error "Wrong format! No leading 0. Use country code. Example: 6281234567890"
+                else
+                    break
+                fi
+            else
+                print_error "Invalid format! Digits only, no +, no leading 0. Example: 6281234567890"
+            fi
         done
     fi
 
@@ -1221,8 +1511,8 @@ services:
       - PANEL_URL=http://host.docker.internal:1997
       - PORTAL_API_KEY=${PORTAL_API_KEY}
       - SESSION_SECRET=${SESSION_SECRET}
-      - WHATSAPP_FORGOT_CODE=1234567890
-      - WHATSAPP_SUPPORT=1234567890
+      - WHATSAPP_FORGOT_CODE=${WA_NUMBER}
+      - WHATSAPP_SUPPORT=${WA_NUMBER}
       - DISPLAY_SSID_24GHZ=1
       - DISPLAY_SSID_58GHZ=5
     restart: unless-stopped
@@ -1247,8 +1537,8 @@ services:
       - PANEL_URL=http://host.docker.internal:1997
       - PORTAL_API_KEY=${PORTAL_API_KEY}
       - SESSION_SECRET=${SESSION_SECRET}
-      - WHATSAPP_FORGOT_CODE=1234567890
-      - WHATSAPP_SUPPORT=1234567890
+      - WHATSAPP_FORGOT_CODE=${WA_NUMBER}
+      - WHATSAPP_SUPPORT=${WA_NUMBER}
       - DISPLAY_SSID_24GHZ=1
       - DISPLAY_SSID_58GHZ=5
     restart: unless-stopped
@@ -1279,7 +1569,7 @@ EOF
         echo "╠══════════════════════════════════════════════════════════╣"
         echo "║  🌐 URL Portal: http://${SERVER_IP}:1998"
         echo "║  🔑 API Key   : ${PORTAL_API_KEY:0:20}..."
-        [ "$LANG_CODE" = "id" ] && echo "║  📱 WhatsApp  : Sesuaikan di environment variables      ║" || echo "║  📱 WhatsApp  : Configure in environment variables      ║"
+        echo "║  📱 WhatsApp  : ${WA_NUMBER}"
         echo "╚══════════════════════════════════════════════════════════╝"
         return 0
     else
@@ -1479,7 +1769,7 @@ docker_menu() {
         read -p "$MSG_CHOOSE (0-2): " choice
         case $choice in
             1) install_docker && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
-            2) uninstall_docker && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            2) uninstall_docker && { print_success "$MSG_PROCESS_COMPLETE"; exit 0; } || { print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER"; };;
             0) return;;
             *) print_error "$MSG_INVALID_CHOICE"; read -p "$MSG_PRESS_ENTER";;
         esac
@@ -1527,6 +1817,36 @@ customer_portal_menu() {
 }
 
 main() {
+    # Ensure cleanup runs on exit; Ctrl+C / termination exit immediately
+    trap 'exit 0' INT TERM
+    trap cleanup_logout EXIT
+
+    # 1. Pre-flight readiness check
+    preflight_check || exit 1
+
+    # 2. Docker check / install prompt if not ready
+    if ! command -v docker &> /dev/null || ! docker info &> /dev/null; then
+        echo ""
+        if [ "$LANG_CODE" = "id" ]; then
+            print_warning "$PREFLIGHT_INSTALL_DOCKER_PROMPT"
+            read -p "Install Docker sekarang? (y/n): " install_docker_now
+        else
+            print_warning "$PREFLIGHT_INSTALL_DOCKER_PROMPT"
+            read -p "Install Docker now? (y/n): " install_docker_now
+        fi
+
+        if [ "$install_docker_now" = "y" ] || [ "$install_docker_now" = "Y" ]; then
+            install_docker || { [ "$LANG_CODE" = "id" ] && print_error "Instalasi Docker gagal. Installer dihentikan." || print_error "Docker installation failed. Installer aborted."; exit 1; }
+        else
+            [ "$LANG_CODE" = "id" ] && print_error "Docker diperlukan untuk melanjutkan. Installer dihentikan." || print_error "Docker is required to continue. Installer aborted."
+            exit 1
+        fi
+    fi
+
+    # 3. Required Docker Hub login
+    dockerhub_login || exit 1
+
+    # 4. Main installer menu
     while true; do
         show_menu
         read -p "$MSG_CHOOSE (1-6): " choice
@@ -1536,7 +1856,7 @@ main() {
             3) panel_menu;;
             4) customer_portal_menu;;
             5) show_status; read -p "$MSG_PRESS_ENTER";;
-            6) print_info "$MSG_THANK_YOU"; exit 0;;
+            6) print_info "$MSG_THANK_YOU"; print_info "$EXIT_MESSAGE"; exit 0;;
             *) print_error "$MSG_INVALID_CHOICE"; read -p "$MSG_PRESS_ENTER";;
         esac
     done
