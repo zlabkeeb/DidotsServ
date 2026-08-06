@@ -11,7 +11,7 @@ GITHUB_BRANCH="main"
 GITHUB_RAW_BASE="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}"
 DB_URL="${GITHUB_RAW_BASE}/db"
 
-INSTALLER_VERSION="5.6"
+INSTALLER_VERSION="6.1"
 
 # Detect system language
 LANG_CODE="${LANG:0:2}"
@@ -639,6 +639,23 @@ choose_memory_limit() {
 }
 
 # ============================================================
+# DOCKER COMPOSE COMMAND DETECTION
+# ============================================================
+# Resolves to 'docker compose' (plugin) or 'docker-compose' (standalone).
+# Plugin is preferred. No blind fallback after a real failure, so real
+# errors from 'up -d' are surfaced instead of being masked by a
+# missing standalone binary.
+compose_run() {
+    if docker compose version &> /dev/null 2>&1; then
+        docker compose "$@"
+    elif command -v docker-compose &> /dev/null 2>&1; then
+        docker-compose "$@"
+    else
+        return 127
+    fi
+}
+
+# ============================================================
 # INSTALL DOCKER
 # ============================================================
 install_docker() {
@@ -651,11 +668,11 @@ install_docker() {
     if command -v docker &> /dev/null; then
         [ "$LANG_CODE" = "id" ] && print_warning "Docker sudah terinstall!" || print_warning "Docker is already installed!"
         docker --version
-        if docker compose version &> /dev/null; then
+        if compose_run version &> /dev/null; then
             return 0
         fi
         [ "$LANG_CODE" = "id" ] && print_warning "Docker Compose plugin tidak tersedia, menginstall..." || print_warning "Docker Compose plugin not available, installing..."
-        if safe_apt_get apt-get install -y docker-compose-plugin 2>/dev/null && docker compose version &> /dev/null; then
+        if safe_apt_get apt-get install -y docker-compose-plugin 2>/dev/null && compose_run version &> /dev/null; then
             [ "$LANG_CODE" = "id" ] && print_success "✅ Docker Compose plugin terpasang!" || print_success "✅ Docker Compose plugin installed!"
             return 0
         fi
@@ -747,11 +764,11 @@ install_docker() {
     if docker --version; then
         [ "$LANG_CODE" = "id" ] && print_success "✅ Docker berhasil diinstall!" || print_success "✅ Docker installed successfully!"
 
-        if docker compose version &> /dev/null; then
-            [ "$LANG_CODE" = "id" ] && print_success "✅ Docker Compose plugin tersedia!" || print_success "✅ Docker Compose plugin available!"
-            docker compose version
+        if compose_run version &> /dev/null; then
+            [ "$LANG_CODE" = "id" ] && print_success "✅ Docker Compose tersedia!" || print_success "✅ Docker Compose available!"
+            compose_run version
         else
-            [ "$LANG_CODE" = "id" ] && print_warning "Docker Compose plugin tidak tersedia, menginstall standalone..." || print_warning "Docker Compose plugin not available, installing standalone..."
+            [ "$LANG_CODE" = "id" ] && print_warning "Docker Compose tidak tersedia, menginstall standalone..." || print_warning "Docker Compose not available, installing standalone..."
             [ "$LANG_CODE" = "id" ] && loading_animation "📦 Menginstall Docker Compose standalone" || loading_animation "📦 Installing Docker Compose standalone"
             COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d\" -f4)
             curl -L "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
@@ -958,9 +975,7 @@ EOF
     echo "========================================================="
     echo ""
 
-    if docker compose up -d; then
-        COMPOSE_SUCCESS=true
-    elif docker-compose up -d; then
+    if compose_run up -d; then
         COMPOSE_SUCCESS=true
     else
         COMPOSE_SUCCESS=false
@@ -1241,7 +1256,7 @@ EOF
 
     echo ""; echo "========================================================="; [ "$LANG_CODE" = "id" ] && animated_text "🐳 Memulai Docker Compose..." 0.08 || animated_text "🐳 Starting Docker Compose..." 0.08; echo "========================================================="; echo ""
 
-    if docker compose up -d; then COMPOSE_SUCCESS=true; elif docker-compose up -d; then COMPOSE_SUCCESS=true; else COMPOSE_SUCCESS=false; fi
+    if compose_run up -d; then COMPOSE_SUCCESS=true; else COMPOSE_SUCCESS=false; fi
 
     echo ""; echo "========================================================="
     if [ "$COMPOSE_SUCCESS" = true ]; then
@@ -1452,7 +1467,7 @@ EOF
 
     echo ""; echo "========================================================="; [ "$LANG_CODE" = "id" ] && animated_text "🐳 Memulai Docker Compose..." 0.08 || animated_text "🐳 Starting Docker Compose..." 0.08; echo "========================================================="; echo ""
 
-    if docker compose up -d; then COMPOSE_SUCCESS=true; elif docker-compose up -d; then COMPOSE_SUCCESS=true; else COMPOSE_SUCCESS=false; fi
+    if compose_run up -d; then COMPOSE_SUCCESS=true; else COMPOSE_SUCCESS=false; fi
 
     echo ""; echo "========================================================="
     if [ "$COMPOSE_SUCCESS" = true ]; then
@@ -1540,7 +1555,7 @@ show_status() {
     if command -v docker &> /dev/null; then
         [ "$LANG_CODE" = "id" ] && print_success "✅ Docker: Terinstall" || print_success "✅ Docker: Installed"
         docker --version
-        docker compose version &> /dev/null && docker compose version || (docker-compose --version &> /dev/null && docker-compose --version)
+        compose_run version 2>/dev/null || true
 
         echo ""
         [ "$LANG_CODE" = "id" ] && loading_animation "📋 Memeriksa status container" || loading_animation "📋 Checking container status"
