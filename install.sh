@@ -37,8 +37,6 @@ case $LANG_CODE in
         PREFLIGHT_CHECKING="Memeriksa kesiapan sistem..."
         PREFLIGHT_OS="Sistem Operasi"
         PREFLIGHT_ARCH="Arsitektur"
-        PREFLIGHT_RAM="Total RAM"
-        PREFLIGHT_DISK="Disk tersedia di /root"
         PREFLIGHT_INTERNET="Koneksi internet"
         PREFLIGHT_DEPS="Dependencies"
         PREFLIGHT_DOCKER="Docker"
@@ -92,8 +90,6 @@ case $LANG_CODE in
         PREFLIGHT_CHECKING="Checking system readiness..."
         PREFLIGHT_OS="Operating System"
         PREFLIGHT_ARCH="Architecture"
-        PREFLIGHT_RAM="Total RAM"
-        PREFLIGHT_DISK="Disk available at /root"
         PREFLIGHT_INTERNET="Internet connection"
         PREFLIGHT_DEPS="Dependencies"
         PREFLIGHT_DOCKER="Docker"
@@ -229,13 +225,12 @@ kill_apt_processes() {
 }
 
 safe_apt_get() {
-    local cmd="$@"
     local max_retries=3
     local retry=0
 
     while [ $retry -lt $max_retries ]; do
         if wait_for_dpkg_lock; then
-            eval "$cmd" && return 0
+            "$@" && return 0
             retry=$((retry + 1))
             [ $retry -lt $max_retries ] && { [ "$LANG_CODE" = "id" ] && print_warning "Percobaan ke-$retry gagal, mencoba lagi..." || print_warning "Attempt $retry failed, retrying..."; sleep 3; }
         else
@@ -318,27 +313,12 @@ show_firewall_status() {
 # ============================================================
 # Animation and loading functions
 # ============================================================
-show_spinner() {
-    local pid=$1
-    local message=$2
-    local delay=0.1
-    local spinstr='|/-\'
-
-    while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
-        local temp=${spinstr#?}
-        printf " [%c] %s" "$spinstr" "$message"
-        local spinstr=$temp${spinstr%"$temp"}
-        sleep $delay
-        printf "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"
-    done
-    printf "    \b\b\b\b"
-}
-
 show_progress_bar() {
     local duration=$1
     local message=$2
     local bar_length=40
 
+    [ "$duration" -lt 1 ] 2>/dev/null && duration=1
     printf "\n%s\n" "$message"
     for ((i=0; i<=duration; i++)); do
         local progress=$((i * bar_length / duration))
@@ -470,33 +450,6 @@ preflight_check() {
     fi
     printf "  %-30s %-25s [ %s ]\n" "$PREFLIGHT_ARCH" "$check_value" "$check_status"
 
-    # RAM
-    TOTAL_RAM=$(get_total_ram)
-    if [ -n "$TOTAL_RAM" ] && [ "$TOTAL_RAM" -ge 2048 ] 2>/dev/null; then
-        check_value="${TOTAL_RAM} MB"
-        check_status="$PREFLIGHT_PASS"
-    else
-        check_value="${TOTAL_RAM:-0} MB (< 2048 MB)"
-        check_status="$PREFLIGHT_FAIL"
-        fatal=$((fatal + 1))
-        [ "$LANG_CODE" = "id" ] && print_error "RAM minimum 2048 MB diperlukan" || print_error "Minimum 2048 MB RAM is required"
-    fi
-    printf "  %-30s %-25s [ %s ]\n" "$PREFLIGHT_RAM" "$check_value" "$check_status"
-
-    # Disk
-    local root_avail
-    root_avail=$(df -m /root 2>/dev/null | awk 'NR==2{print $4}')
-    [ -z "$root_avail" ] && root_avail=$(df -m / 2>/dev/null | awk 'NR==2{print $4}')
-    if [ -n "$root_avail" ] && [ "$root_avail" -ge 2048 ] 2>/dev/null; then
-        check_value="${root_avail} MB"
-        check_status="$PREFLIGHT_PASS"
-    else
-        check_value="${root_avail:-0} MB (< 2048 MB)"
-        check_status="$PREFLIGHT_FAIL"
-        fatal=$((fatal + 1))
-    fi
-    printf "  %-30s %-25s [ %s ]\n" "$PREFLIGHT_DISK" "$check_value" "$check_status"
-
     # Internet (multi-endpoint check for reliability)
     local internet_ok=false
     local endpoints=("https://hub.docker.com/" "https://www.google.com/" "https://www.cloudflare.com/")
@@ -517,7 +470,7 @@ preflight_check() {
     printf "  %-30s %-25s [ %s ]\n" "$PREFLIGHT_INTERNET" "$check_value" "$check_status"
 
     # Dependencies
-    local deps=("curl" "openssl" "gpg" "awk" "free" "df" "fuser")
+    local deps=("curl" "openssl" "gpg" "awk" "free" "fuser")
     local missing_deps=()
     for dep in "${deps[@]}"; do
         command -v "$dep" &> /dev/null || missing_deps+=("$dep")
@@ -635,6 +588,7 @@ choose_memory_limit() {
     local service_name=$1
     local auto_mode=${2:-false}
     TOTAL_RAM=$(get_total_ram)
+    [ -z "$TOTAL_RAM" ] && TOTAL_RAM=0
     RAM_50=$((TOTAL_RAM * 50 / 100))
 
     if [ "$auto_mode" = "true" ]; then
@@ -686,7 +640,21 @@ install_docker() {
     if command -v docker &> /dev/null; then
         [ "$LANG_CODE" = "id" ] && print_warning "Docker sudah terinstall!" || print_warning "Docker is already installed!"
         docker --version
-        docker compose version &> /dev/null && return 0
+        if docker compose version &> /dev/null; then
+            return 0
+        fi
+        [ "$LANG_CODE" = "id" ] && print_warning "Docker Compose plugin tidak tersedia, menginstall..." || print_warning "Docker Compose plugin not available, installing..."
+        if safe_apt_get apt-get install -y docker-compose-plugin 2>/dev/null && docker compose version &> /dev/null; then
+            [ "$LANG_CODE" = "id" ] && print_success "✅ Docker Compose plugin terpasang!" || print_success "✅ Docker Compose plugin installed!"
+            return 0
+        fi
+        [ "$LANG_CODE" = "id" ] && loading_animation "📦 Menginstall Docker Compose standalone" || loading_animation "📦 Installing Docker Compose standalone"
+        COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d\" -f4)
+        curl -L "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        chmod +x /usr/local/bin/docker-compose
+        ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
+        docker-compose --version && { [ "$LANG_CODE" = "id" ] && print_success "✅ Docker Compose standalone terpasang!" || print_success "✅ Docker Compose standalone installed!"; }
+        return 0
     fi
 
     OS_INFO=$(detect_os)
@@ -918,61 +886,22 @@ install_genieacs() {
     GENIEACS_JWT_SECRET=$(openssl rand -hex 32)
 
     if [ "$MEMORY_LIMIT" = "unlimited" ]; then
-        cat > docker-compose.yml <<EOF
-services:
-  genieacs:
-    cpu_shares: 90
-    container_name: genieacs
-    depends_on:
-      - mongo
-    environment:
-      - GENIEACS_CWMP_ACCESS_LOG_FILE=/var/log/genieacs/genieacs-cwmp-access.log
-      - GENIEACS_DEBUG_FILE=/var/log/genieacs/genieacs-debug.yaml
-      - GENIEACS_EXT_DIR=/opt/genieacs/ext
-      - GENIEACS_FS_ACCESS_LOG_FILE=/var/log/genieacs/genieacs-fs-access.log
-      - GENIEACS_MONGODB_CONNECTION_URL=mongodb://mongo/genieacs
-      - GENIEACS_NBI_ACCESS_LOG_FILE=/var/log/genieacs/genieacs-nbi-access.log
-      - GENIEACS_UI_ACCESS_LOG_FILE=/var/log/genieacs/genieacs-ui-access.log
-      - GENIEACS_UI_JWT_SECRET=${GENIEACS_JWT_SECRET}
-    hostname: genieacs
-    image: drumsergio/genieacs:latest
-    ports:
-      - "3000:3000"
-      - "7547:7547"
-      - "7557:7557"
-      - "7567:7567"
-    restart: always
-    networks:
-      - genieacs_network
-  mongo:
-    cpu_shares: 90
-    container_name: mongo-genieacs
-    environment:
-      - MONGO_DATA_DIR=/data/db
-      - MONGO_LOG_DIR=/var/log/mongodb
-    hostname: mongo-genieacs
-    image: mongo:4.4.6
-    restart: always
-    networks:
-      - genieacs_network
-    volumes:
-      - ./mongo-data:/data/db
-networks:
-  genieacs_network:
-    driver: bridge
-EOF
+        DEPLOY_BLOCK=""
     else
-        cat > docker-compose.yml <<EOF
+        DEPLOY_BLOCK="    deploy:
+      resources:
+        limits:
+          memory: ${MEMORY_LIMIT}M"
+    fi
+
+    cat > docker-compose.yml <<EOF
 services:
   genieacs:
     cpu_shares: 90
     container_name: genieacs
     depends_on:
       - mongo
-    deploy:
-      resources:
-        limits:
-          memory: ${MEMORY_LIMIT}M
+${DEPLOY_BLOCK}
     environment:
       - GENIEACS_CWMP_ACCESS_LOG_FILE=/var/log/genieacs/genieacs-cwmp-access.log
       - GENIEACS_DEBUG_FILE=/var/log/genieacs/genieacs-debug.yaml
@@ -995,10 +924,7 @@ services:
   mongo:
     cpu_shares: 90
     container_name: mongo-genieacs
-    deploy:
-      resources:
-        limits:
-          memory: ${MEMORY_LIMIT}M
+${DEPLOY_BLOCK}
     environment:
       - MONGO_DATA_DIR=/data/db
       - MONGO_LOG_DIR=/var/log/mongodb
@@ -1013,7 +939,6 @@ networks:
   genieacs_network:
     driver: bridge
 EOF
-    fi
 
     echo ""
     echo "========================================================="
@@ -1066,9 +991,10 @@ download_with_retry() {
     local retry=0
 
     while [ $retry -lt $max_retries ]; do
-        if curl -f -s -L -o "$file" "$url"; then
+        if curl -f -s -L -o "$file" "$url" && [ -s "$file" ]; then
             return 0
         fi
+        rm -f "$file" 2>/dev/null
         retry=$((retry + 1))
         [ $retry -lt $max_retries ] && sleep 2
     done
@@ -1275,33 +1201,20 @@ install_genieacs_panel() {
     [ "$LANG_CODE" = "id" ] && loading_animation "📝 Membuat konfigurasi Docker Compose" || loading_animation "📝 Creating Docker Compose configuration"
 
     if [ "$MEMORY_LIMIT" = "unlimited" ]; then
-        cat > docker-compose.yml <<EOF
-services:
-  genieacs-panel-api:
-    image: ${IMAGE}
-    container_name: genieacs-panel-api
-    ports:
-      - "1997:1997"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    environment:
-      - JWT_SECRET=${JWT_SECRET}
-      - JWT_EXPIRES_IN=1h
-      - REFRESH_TOKEN_EXPIRES_IN=7d
-      - add_wan=yes
-      - NODE_ENV=production
-    restart: unless-stopped
-EOF
+        DEPLOY_BLOCK=""
     else
-        cat > docker-compose.yml <<EOF
-services:
-  genieacs-panel-api:
-    image: ${IMAGE}
-    container_name: genieacs-panel-api
-    deploy:
+        DEPLOY_BLOCK="    deploy:
       resources:
         limits:
-          memory: ${MEMORY_LIMIT}M
+          memory: ${MEMORY_LIMIT}M"
+    fi
+
+    cat > docker-compose.yml <<EOF
+services:
+  genieacs-panel-api:
+    image: ${IMAGE}
+    container_name: genieacs-panel-api
+${DEPLOY_BLOCK}
     ports:
       - "1997:1997"
     extra_hosts:
@@ -1314,7 +1227,6 @@ services:
       - NODE_ENV=production
     restart: unless-stopped
 EOF
-    fi
 
     echo ""; echo "========================================================="; [ "$LANG_CODE" = "id" ] && animated_text "🐳 Memulai Docker Compose..." 0.08 || animated_text "🐳 Starting Docker Compose..." 0.08; echo "========================================================="; echo ""
 
@@ -1496,37 +1408,20 @@ install_customer_portal() {
     [ "$LANG_CODE" = "id" ] && loading_animation "📝 Membuat konfigurasi Docker Compose" || loading_animation "📝 Creating Docker Compose configuration"
 
     if [ "$MEMORY_LIMIT" = "unlimited" ]; then
-        cat > docker-compose.yml <<EOF
-services:
-  customerportal:
-    image: ${IMAGE}
-    container_name: customerportal
-    ports:
-      - "1998:1998"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    environment:
-      - NODE_ENV=production
-      - PORT=1998
-      - PANEL_URL=http://host.docker.internal:1997
-      - PORTAL_API_KEY=${PORTAL_API_KEY}
-      - SESSION_SECRET=${SESSION_SECRET}
-      - WHATSAPP_FORGOT_CODE=${WA_NUMBER}
-      - WHATSAPP_SUPPORT=${WA_NUMBER}
-      - DISPLAY_SSID_24GHZ=1
-      - DISPLAY_SSID_58GHZ=5
-    restart: unless-stopped
-EOF
+        DEPLOY_BLOCK=""
     else
-        cat > docker-compose.yml <<EOF
-services:
-  customerportal:
-    image: ${IMAGE}
-    container_name: customerportal
-    deploy:
+        DEPLOY_BLOCK="    deploy:
       resources:
         limits:
-          memory: ${MEMORY_LIMIT}M
+          memory: ${MEMORY_LIMIT}M"
+    fi
+
+    cat > docker-compose.yml <<EOF
+services:
+  customerportal:
+    image: ${IMAGE}
+    container_name: customerportal
+${DEPLOY_BLOCK}
     ports:
       - "1998:1998"
     extra_hosts:
@@ -1543,7 +1438,6 @@ services:
       - DISPLAY_SSID_58GHZ=5
     restart: unless-stopped
 EOF
-    fi
 
     echo ""; echo "========================================================="; [ "$LANG_CODE" = "id" ] && animated_text "🐳 Memulai Docker Compose..." 0.08 || animated_text "🐳 Starting Docker Compose..." 0.08; echo "========================================================="; echo ""
 
@@ -1769,7 +1663,7 @@ docker_menu() {
         read -p "$MSG_CHOOSE (0-2): " choice
         case $choice in
             1) install_docker && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
-            2) uninstall_docker && { print_success "$MSG_PROCESS_COMPLETE"; exit 0; } || { print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER"; };;
+            2) uninstall_docker && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
             0) return;;
             *) print_error "$MSG_INVALID_CHOICE"; read -p "$MSG_PRESS_ENTER";;
         esac
