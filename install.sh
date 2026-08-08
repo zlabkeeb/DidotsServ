@@ -11,7 +11,7 @@ GITHUB_BRANCH="main"
 GITHUB_RAW_BASE="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}"
 DB_URL="${GITHUB_RAW_BASE}/db"
 
-INSTALLER_VERSION="6.1"
+INSTALLER_VERSION="6"
 
 # Detect system language
 LANG_CODE="${LANG:0:2}"
@@ -701,7 +701,7 @@ install_docker() {
     safe_apt_get apt-get update || { [ "$LANG_CODE" = "id" ] && print_error "Gagal update package list" || print_error "Failed to update package list"; return 1; }
 
     [ "$LANG_CODE" = "id" ] && loading_animation "🔧 Menginstall prerequisites" || loading_animation "🔧 Installing prerequisites"
-    safe_apt_get apt-get install -y ca-certificates curl gnupg lsb-release software-properties-common apt-transport-https || { [ "$LANG_CODE" = "id" ] && print_error "Gagal install prerequisites" || print_error "Failed to install prerequisites"; return 1; }
+    safe_apt_get apt-get install -y ca-certificates curl gnupg lsb-release || { [ "$LANG_CODE" = "id" ] && print_error "Gagal install prerequisites" || print_error "Failed to install prerequisites"; return 1; }
 
     [ "$LANG_CODE" = "id" ] && loading_animation "🔍 Memeriksa konfigurasi Docker yang ada" || loading_animation "🔍 Checking existing Docker configuration"
 
@@ -725,6 +725,13 @@ install_docker() {
 
     SYSTEM_ARCH=$(dpkg --print-architecture)
     SYSTEM_CODENAME=$(lsb_release -cs 2>/dev/null || echo "")
+    [ -z "$SYSTEM_CODENAME" ] && SYSTEM_CODENAME="$OS_CODENAME"
+
+    # Docker belum selalu menyediakan repo untuk codename testing/unstable baru.
+    # Gunakan bookworm sebagai fallback yang kompatibel untuk trixie.
+    case "$SYSTEM_CODENAME" in
+        trixie) SYSTEM_CODENAME="bookworm" ;;
+    esac
 
     if [ "$DOCKER_BASE_OS" = "debian" ]; then
         DOCKER_REPO_URL="https://download.docker.com/linux/debian"
