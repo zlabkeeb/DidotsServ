@@ -1284,7 +1284,7 @@ EOF
         [ "$LANG_CODE" = "id" ] && echo "║                    INSTALASI SELESAI!                   ║" || echo "║                  INSTALLATION COMPLETE!                 ║"
         echo "╠══════════════════════════════════════════════════════════╣"
         echo "║  🌐 URL Panel: http://${SERVER_IP}:1997"
-        echo "║  👤 Username : admin                                     ║"
+        echo "║  👤 Username : superadmin                                ║"
         echo "║  🔑 Password : solusidigitalnet                          ║"
         echo "╚══════════════════════════════════════════════════════════╝"
         return 0
@@ -1585,7 +1585,7 @@ show_status() {
         if docker inspect genieacs-panel-api >/dev/null 2>&1 && [ "$(docker inspect -f '{{.State.Running}}' genieacs-panel-api 2>/dev/null)" = "true" ]; then
             [ "$LANG_CODE" = "id" ] && print_success "✅ GenieACS Panel: Berjalan" || print_success "✅ GenieACS Panel: Running"
             echo "  🌐 URL: http://${SERVER_IP}:1997"
-            echo "  👤 admin / solusidigitalnet"
+            echo "  👤 superadmin / solusidigitalnet"
             [ "$LANG_CODE" = "id" ] && echo "  🔌 Port: 1997" || echo "  🔌 Port: 1997"
         else
             [ "$LANG_CODE" = "id" ] && print_warning "⚠️  GenieACS Panel: Tidak Berjalan" || print_warning "⚠️  GenieACS Panel: Not Running"
