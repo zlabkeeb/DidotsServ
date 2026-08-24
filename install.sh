@@ -1229,7 +1229,7 @@ install_genieacs_panel() {
         || { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: ${MEMORY_LIMIT}M" || print_info "Memory limit: ${MEMORY_LIMIT}M"; }
 
     JWT_SECRET=$(openssl rand -hex 32)
-    IMAGE="solusidigitalnet/genieacspanelapi:latest"
+    IMAGE="solusidigitalnet/genieacspanelapi:V2.2.0"
 
     [ "$LANG_CODE" = "id" ] && loading_animation "📝 Membuat konfigurasi Docker Compose" || loading_animation "📝 Creating Docker Compose configuration"
 
@@ -1310,7 +1310,7 @@ uninstall_genieacs_panel() {
     docker stop genieacs-panel-api 2>/dev/null; docker rm genieacs-panel-api 2>/dev/null
 
     [ "$LANG_CODE" = "id" ] && loading_animation "🐳 Menghapus Docker image" || loading_animation "🐳 Removing Docker image"
-    docker rmi solusidigitalnet/genieacspanelapi:latest 2>&1 | grep -v "No such image" || true
+    docker rmi solusidigitalnet/genieacspanelapi:V2.2.0 2>&1 | grep -v "No such image" || true
 
     [ "$LANG_CODE" = "id" ] && loading_animation "📁 Menghapus direktori GenieACS Panel" || loading_animation "📁 Removing GenieACS Panel directory"
     rm -rf /root/genieacspanel
