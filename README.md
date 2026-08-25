@@ -178,7 +178,7 @@ pass : admin
 
 **ACS Panel** — `:1997`
 ```
-user : admin
+user : superadmin
 pass : solusidigitalnet
 ```
 
