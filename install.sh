@@ -1671,7 +1671,7 @@ show_menu() {
 
 show_docker_menu() {
     clear; echo ""; echo "========================================================="; echo "                  $MENU_DOCKER"; echo "========================================================="; echo ""
-    echo "  [1] $SUBMENU_INSTALL_DOCKER"; echo "  [2] $SUBMENU_UNINSTALL_DOCKER"; echo "  [0] $MSG_BACK"; echo ""; echo "========================================================="
+    echo "  [1] $SUBMENU_UNINSTALL_DOCKER"; echo "  [0] $MSG_BACK"; echo ""; echo "========================================================="
 }
 
 show_genieacs_menu() {
@@ -1692,10 +1692,9 @@ show_customer_portal_menu() {
 docker_menu() {
     while true; do
         show_docker_menu
-        read -p "$MSG_CHOOSE (0-2): " choice
+        read -p "$MSG_CHOOSE (0-1): " choice
         case $choice in
-            1) install_docker && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
-            2) uninstall_docker && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            1) uninstall_docker && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
             0) return;;
             *) print_error "$MSG_INVALID_CHOICE"; read -p "$MSG_PRESS_ENTER";;
         esac
