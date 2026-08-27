@@ -24,7 +24,7 @@ d8'   .8P 88.  .88 88 88.  .88       88 88 88    .8P 88 88.  .88 88   88   88.  
 
 <br>
 
-![version](https://img.shields.io/badge/v5.6-brightgreen?style=flat-square&logo=github)
+![version](https://img.shields.io/badge/v6-brightgreen?style=flat-square&logo=github)
 ![platform](https://img.shields.io/badge/Ubuntu%20%7C%20Debian-4A90D9?style=flat-square&logo=linux&logoColor=white)
 ![arch](https://img.shields.io/badge/amd64%20%7C%20arm64%20%7C%20armhf-orange?style=flat-square)
 ![lang](https://img.shields.io/badge/bash-121011?style=flat-square&logo=gnu-bash&logoColor=white)
@@ -47,8 +47,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/zlabkeeb/DidotsServ/main/ins
 ## 🖥️ Preview menu
 
 ```
-  Interactive Installer v5.6
-  Repo: https://github.com/zlabkeeb/DidotsServ
+  Interactive Installer v6
 
   [1] Docker
   [2] GenieACS
@@ -60,17 +59,20 @@ bash <(curl -fsSL https://raw.githubusercontent.com/zlabkeeb/DidotsServ/main/ins
 Pilih menu (1-6):
 ```
 
+> Alur startup: **preflight check** → cek Docker (auto-install jika belum ada) → **login Docker Hub (Access Token)** → menu utama.
+
 ### Submenu
 
 **Docker**
 ```
                   Docker
 
-  [1] Install Docker dan Docker Compose
-  [2] Uninstall Docker dan Docker Compose
+  [1] Uninstall Docker dan Docker Compose
   [0] Kembali
 
 ```
+
+> Install Docker tidak ada di submenu karena sudah ditangani **otomatis** di awal (saat Docker belum terdeteksi).
 
 **GenieACS**
 ```
@@ -109,7 +111,7 @@ Pilih menu (1-6):
 
 | | Menu | Keterangan |
 |--|------|------------|
-| 🐳 | **Docker** | Install / uninstall Docker + Compose |
+| 🐳 | **Docker** | Auto-install di awal bila belum ada · uninstall via menu |
 | 🚀 | **ACS Core** | Install, konfigurasi DB, atau uninstall |
 | 🖥️ | **ACS Panel** | Panel manajemen berbasis web |
 | 🌐 | **Customer Portal** | Portal pelanggan self-service |
