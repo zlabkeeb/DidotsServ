@@ -589,7 +589,6 @@ dockerhub_login() {
 cleanup_logout() {
     [ "$DOCKER_HUB_LOGGED_IN" != "true" ] && return 0
     if command -v docker &> /dev/null; then
-        [ "$LANG_CODE" = "id" ] && print_info "$DOCKER_LOGOUT..." || print_info "$DOCKER_LOGOUT..."
         docker logout &> /dev/null && { [ "$LANG_CODE" = "id" ] && print_success "$DOCKER_LOGOUT_DONE" || print_success "$DOCKER_LOGOUT_DONE"; }
     fi
     DOCKER_HUB_LOGGED_IN=false
