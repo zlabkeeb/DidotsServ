@@ -11,7 +11,7 @@ GITHUB_BRANCH="main"
 GITHUB_RAW_BASE="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}"
 DB_URL="${GITHUB_RAW_BASE}/db"
 
-INSTALLER_VERSION="7"
+INSTALLER_VERSION="8"
 
 # Detect system language
 LANG_CODE="${LANG:0:2}"
@@ -1203,34 +1203,35 @@ install_genieacs_panel() {
     cd /root || return 1
 
     if [ -d "genieacspanel" ]; then
+        # Folder already exists — preserve the database, just update config.
         if [ "$LANG_CODE" = "id" ]; then
-            print_warning "Direktori genieacspanel sudah ada!"
-            read -p "Hapus dan buat ulang? (y/n): " confirm
+            print_info "Direktori genieacspanel sudah ada — database dipertahankan"
         else
-            print_warning "GenieACS Panel directory already exists!"
-            read -p "Remove and recreate? (y/n): " confirm
+            print_info "GenieACS Panel directory already exists — database preserved"
         fi
-
-        if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
-            [ "$LANG_CODE" = "id" ] && loading_animation "🗑️  Menghapus container yang ada" || loading_animation "🗑️  Removing existing container"
-            docker stop genieacs-panel-api 2>/dev/null; docker rm genieacs-panel-api 2>/dev/null
-            rm -rf genieacspanel
+        [ "$LANG_CODE" = "id" ] && loading_animation "🗑️  Menghentikan container lama" || loading_animation "🗑️  Stopping existing container"
+        docker stop genieacs-panel-api 2>/dev/null; docker rm genieacs-panel-api 2>/dev/null
+        cd genieacspanel || return 1
+        # Preserve existing JWT_SECRET so active sessions survive an update
+        EXISTING_JWT=$(grep -E 'JWT_SECRET=' docker-compose.yml 2>/dev/null | head -1 | sed -E 's/.*JWT_SECRET=([^[:space:]]*).*/\1/')
+        if [ -n "$EXISTING_JWT" ]; then
+            JWT_SECRET="$EXISTING_JWT"
         else
-            return 1
+            JWT_SECRET=$(openssl rand -hex 32)
         fi
+    else
+        mkdir -p genieacspanel && cd genieacspanel || return 1
+        JWT_SECRET=$(openssl rand -hex 32)
     fi
-
-    mkdir -p genieacspanel && cd genieacspanel || return 1
 
     MEMORY_LIMIT=$(choose_memory_limit "GenieACS Panel")
     [ "$MEMORY_LIMIT" = "unlimited" ] \
         && { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: Unlimited" || print_info "Memory limit: Unlimited"; } \
         || { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: ${MEMORY_LIMIT}M" || print_info "Memory limit: ${MEMORY_LIMIT}M"; }
 
-    JWT_SECRET=$(openssl rand -hex 32)
     IMAGE="solusidigitalnet/genieacspanelapi:V2.3.0"
 
-    [ "$LANG_CODE" = "id" ] && loading_animation "📝 Membuat konfigurasi Docker Compose" || loading_animation "📝 Creating Docker Compose configuration"
+    [ "$LANG_CODE" = "id" ] && loading_animation "📝 Memperbarui konfigurasi Docker Compose" || loading_animation "📝 Updating Docker Compose configuration"
 
     if [ "$MEMORY_LIMIT" = "unlimited" ]; then
         DEPLOY_BLOCK=""
@@ -1242,6 +1243,7 @@ install_genieacs_panel() {
     fi
 
     mkdir -p db
+    chown -R 1001:1001 db
 
     cat > docker-compose.yml <<EOF
 services:
@@ -1316,8 +1318,11 @@ uninstall_genieacs_panel() {
     [ "$LANG_CODE" = "id" ] && loading_animation "🐳 Menghapus Docker image" || loading_animation "🐳 Removing Docker image"
     docker rmi solusidigitalnet/genieacspanelapi:V2.3.0 2>&1 | grep -v "No such image" || true
 
-    [ "$LANG_CODE" = "id" ] && loading_animation "📁 Menghapus direktori GenieACS Panel" || loading_animation "📁 Removing GenieACS Panel directory"
-    rm -rf /root/genieacspanel
+    # Always preserve the panel folder + database so a reinstall/update
+    # keeps existing data. Never delete it from uninstall.
+    if [ -d /root/genieacspanel ]; then
+        [ "$LANG_CODE" = "id" ] && print_info "Folder & database tetap tersimpan di /root/genieacspanel untuk reinstall." || print_info "Folder & database kept at /root/genieacspanel for reinstall."
+    fi
 
     if [ "$(check_ufw_status)" = "active" ]; then
         echo ""
