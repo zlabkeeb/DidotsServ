@@ -11,7 +11,7 @@ GITHUB_BRANCH="main"
 GITHUB_RAW_BASE="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}"
 DB_URL="${GITHUB_RAW_BASE}/db"
 
-INSTALLER_VERSION="6"
+INSTALLER_VERSION="7"
 
 # Detect system language
 LANG_CODE="${LANG:0:2}"
@@ -1228,7 +1228,7 @@ install_genieacs_panel() {
         || { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: ${MEMORY_LIMIT}M" || print_info "Memory limit: ${MEMORY_LIMIT}M"; }
 
     JWT_SECRET=$(openssl rand -hex 32)
-    IMAGE="solusidigitalnet/genieacspanelapi:V2.2.0"
+    IMAGE="solusidigitalnet/genieacspanelapi:V2.3.0"
 
     [ "$LANG_CODE" = "id" ] && loading_animation "📝 Membuat konfigurasi Docker Compose" || loading_animation "📝 Creating Docker Compose configuration"
 
@@ -1240,6 +1240,8 @@ install_genieacs_panel() {
         limits:
           memory: ${MEMORY_LIMIT}M"
     fi
+
+    mkdir -p db
 
     cat > docker-compose.yml <<EOF
 services:
@@ -1257,6 +1259,9 @@ ${DEPLOY_BLOCK}
       - REFRESH_TOKEN_EXPIRES_IN=7d
       - add_wan=yes
       - NODE_ENV=production
+      - DB_PATH=/data/database.sqlite
+    volumes:
+      - ./db:/data
     restart: unless-stopped
 EOF
 
@@ -1309,7 +1314,7 @@ uninstall_genieacs_panel() {
     docker stop genieacs-panel-api 2>/dev/null; docker rm genieacs-panel-api 2>/dev/null
 
     [ "$LANG_CODE" = "id" ] && loading_animation "🐳 Menghapus Docker image" || loading_animation "🐳 Removing Docker image"
-    docker rmi solusidigitalnet/genieacspanelapi:V2.2.0 2>&1 | grep -v "No such image" || true
+    docker rmi solusidigitalnet/genieacspanelapi:V2.3.0 2>&1 | grep -v "No such image" || true
 
     [ "$LANG_CODE" = "id" ] && loading_animation "📁 Menghapus direktori GenieACS Panel" || loading_animation "📁 Removing GenieACS Panel directory"
     rm -rf /root/genieacspanel
