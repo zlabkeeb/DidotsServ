@@ -1804,16 +1804,11 @@ if [ "$EUID" -ne 0 ]; then
         echo "Gunakan salah satu cara berikut:"
         echo "  1. sudo bash $0"
         echo "  2. su - root, lalu jalankan: bash $0"
-        echo ""
-        echo "Atau install langsung via:"
     else
         echo "Use one of the following methods:"
         echo "  1. sudo bash $0"
         echo "  2. su - root, then run: bash $0"
-        echo ""
-        echo "Or install directly via:"
     fi
-    echo "  bash <(curl -fsSL https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}/install.sh)"
     echo ""
     echo "========================================================="
     echo ""
