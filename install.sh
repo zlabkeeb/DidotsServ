@@ -1,6 +1,16 @@
 #!/bin/bash
-# Docker Hub account
-DOCKER_HUB_USER="solusidigitalnet"
+
+# ============================================================
+# CONFIGURATION - Approval Gateway (device flow)
+# ============================================================
+# install.sh requests a unique code from this server, waits for an
+# admin to click "Approve" on the dashboard, then receives a Docker
+# Hub access token from the server. Must be HTTPS. If the server is
+# down, the installer aborts with a clear "server offline" message.
+INSTALL_SERVER_URL="https://installtools.solusi-digital.net"
+INSTALL_SERVER_TIMEOUT=5      # health-check timeout in seconds
+INSTALL_POLL_INTERVAL=3       # seconds between status polls
+INSTALL_POLL_TIMEOUT=300       # max seconds to wait for approval
 
 # ============================================================
 # CONFIGURATION - GitHub Repository
@@ -49,11 +59,25 @@ case $LANG_CODE in
         DOCKER_LOGIN_FAILED="Akses token tidak valid"
         DOCKER_LOGIN_RETRY="Token tidak valid, coba lagi"
         DOCKER_LOGIN_EXIT="Gagal setelah 3 percobaan. Keluar."
-        ACCESS_TOKEN_CONTACT="Hubungi saya untuk mendapatkan Akses Token:"
-        ACCESS_TOKEN_DONATE="Silakan donate untuk mendapatkan akses token dan hubungi kontak di atas."
+        ACCESS_TOKEN_CONTACT="Hubungi saya untuk informasi & dukungan:"
+        ACCESS_TOKEN_DONATE="Biaya install per server Rp 150.000 (sekali bayar, tanpa biaya bulanan)"
         DOCKER_LOGOUT="Logout dari Docker Hub"
         DOCKER_LOGOUT_DONE="Berhasil logout dari Docker Hub"
         DOCKER_LOGOUT_NONE="Tidak ada sesi Docker Hub untuk di-logout"
+        DEVICE_TITLE="APPROVAL DIBUTUHKAN"
+        DEVICE_INTRO="Menunggu approval dari admin"
+        DEVICE_CODE="Kode unik Anda"
+        DEVICE_APPROVE_AT="Approve di panel admin:"
+        DEVICE_WAITING="Menunggu approval..."
+        DEVICE_APPROVED="Disetujui! Mengirim token ke Docker..."
+        DEVICE_REJECTED="Permintaan ditolak oleh admin"
+        DEVICE_TIMEOUT="Timeout: tidak ada approval dalam waktu"
+        DEVICE_SERVER_OFFLINE="Server approval sedang offline. Coba lagi nanti."
+        DEVICE_TOKEN_OK="Login Docker Hub berhasil"
+        DEVICE_TOKEN_FAIL="Login Docker Hub gagal dengan token dari server"
+        DEVICE_TOKEN_RETRY="Token gagal, mencoba token lain..."
+        DEVICE_TOKEN_EXHAUSTED="Semua token habis/gagal. Hubungi admin."
+        DEVICE_HEALTH_FAIL="Tidak dapat menghubungi server approval"
         EXIT_MESSAGE="Keluar dari installer"
 
         MENU_DOCKER="Docker"
@@ -69,6 +93,7 @@ case $LANG_CODE in
         SUBMENU_CONFIG_GENIEACS="Konfigurasi DB GenieACS"
         SUBMENU_UNINSTALL_GENIEACS="Uninstall GenieACS"
         SUBMENU_INSTALL_PANEL="Install GenieACS Panel"
+        SUBMENU_UPDATE_PANEL="Update GenieACS Panel"
         SUBMENU_UNINSTALL_PANEL="Uninstall GenieACS Panel"
         SUBMENU_INSTALL_CUSTOMER_PORTAL="Install Customer Portal"
         SUBMENU_UNINSTALL_CUSTOMER_PORTAL="Uninstall Customer Portal"
@@ -104,11 +129,25 @@ case $LANG_CODE in
         DOCKER_LOGIN_FAILED="Access token invalid"
         DOCKER_LOGIN_RETRY="Invalid token, please try again"
         DOCKER_LOGIN_EXIT="Failed after 3 attempts. Exiting."
-        ACCESS_TOKEN_CONTACT="Contact me to get an Access Token:"
-        ACCESS_TOKEN_DONATE="Please donate to get an access token and contact me above."
+        ACCESS_TOKEN_CONTACT="Contact me for info & support:"
+        ACCESS_TOKEN_DONATE="Installation fee per server Rp 150.000 (one-time, no monthly fee)"
         DOCKER_LOGOUT="Logging out from Docker Hub"
         DOCKER_LOGOUT_DONE="Successfully logged out from Docker Hub"
         DOCKER_LOGOUT_NONE="No Docker Hub session to logout"
+        DEVICE_TITLE="APPROVAL REQUIRED"
+        DEVICE_INTRO="Waiting for admin approval"
+        DEVICE_CODE="Your unique code"
+        DEVICE_APPROVE_AT="Approve at admin panel:"
+        DEVICE_WAITING="Waiting for approval..."
+        DEVICE_APPROVED="Approved! Sending token to Docker..."
+        DEVICE_REJECTED="Request rejected by admin"
+        DEVICE_TIMEOUT="Timeout: no approval within"
+        DEVICE_SERVER_OFFLINE="Approval server is offline. Try again later."
+        DEVICE_TOKEN_OK="Docker Hub login successful"
+        DEVICE_TOKEN_FAIL="Docker Hub login failed with server-issued token"
+        DEVICE_TOKEN_RETRY="Token failed, trying another token..."
+        DEVICE_TOKEN_EXHAUSTED="All tokens exhausted/failed. Contact admin."
+        DEVICE_HEALTH_FAIL="Cannot reach approval server"
         EXIT_MESSAGE="Exiting installer"
 
         MENU_DOCKER="Docker"
@@ -124,6 +163,7 @@ case $LANG_CODE in
         SUBMENU_CONFIG_GENIEACS="Configure GenieACS Database"
         SUBMENU_UNINSTALL_GENIEACS="Uninstall GenieACS"
         SUBMENU_INSTALL_PANEL="Install GenieACS Panel"
+        SUBMENU_UPDATE_PANEL="Update GenieACS Panel"
         SUBMENU_UNINSTALL_PANEL="Uninstall GenieACS Panel"
         SUBMENU_INSTALL_CUSTOMER_PORTAL="Install Customer Portal"
         SUBMENU_UNINSTALL_CUSTOMER_PORTAL="Uninstall Customer Portal"
@@ -474,7 +514,7 @@ preflight_check() {
     printf "  %-30s %-25s [ %s ]\n" "$PREFLIGHT_INTERNET" "$check_value" "$check_status"
 
     # Dependencies
-    local deps=("curl" "openssl" "gpg" "awk" "free" "fuser")
+    local deps=("curl" "openssl" "gpg" "awk" "free" "fuser" "jq")
     local missing_deps=()
     for dep in "${deps[@]}"; do
         command -v "$dep" &> /dev/null || missing_deps+=("$dep")
@@ -486,7 +526,7 @@ preflight_check() {
         check_value="missing: ${missing_deps[*]}"
         check_status="$PREFLIGHT_FAIL"
         [ "$LANG_CODE" = "id" ] && print_warning "Menginstall dependencies yang kurang..." || print_warning "Installing missing dependencies..."
-        safe_apt_get apt-get update && safe_apt_get apt-get install -y curl openssl gnupg coreutils procps psmisc
+        safe_apt_get apt-get update && safe_apt_get apt-get install -y curl openssl gnupg coreutils procps psmisc jq
         # Re-check
         missing_deps=()
         for dep in "${deps[@]}"; do
@@ -533,54 +573,223 @@ preflight_check() {
 }
 
 # ============================================================
-# DOCKER HUB LOGIN / LOGOUT
+# APPROVAL GATEWAY HELPERS (device flow)
+# ============================================================
+# Extract a top-level string field from a JSON document. Uses jq when
+# available, falls back to a simple sed pattern for flat objects so the
+# installer still works if jq could not be installed.
+json_get() {
+    local json="$1"
+    local key="$2"
+    if command -v jq >/dev/null 2>&1; then
+        printf '%s' "$json" | jq -r --arg k "$key" '.[$k] // empty' 2>/dev/null
+        return $?
+    fi
+    printf '%s' "$json" | sed -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n1
+}
+
+# Call a JSON API endpoint. $1=method, $2=path, $3=body(POST). Prints body.
+api_call() {
+    local method="$1"
+    local path="$2"
+    local body="${3:-}"
+    local url="${INSTALL_SERVER_URL}${path}"
+    if [ "$method" = "GET" ]; then
+        curl --fail --silent --show-error --max-time 10 --retry 2 \
+             -H 'Accept: application/json' "$url"
+    else
+        curl --fail --silent --show-error --max-time 10 --retry 2 \
+             -X POST -H 'Content-Type: application/json' -H 'Accept: application/json' \
+             --data "$body" "$url"
+    fi
+}
+
+# Lightweight liveness probe. Returns 0 if the approval server responds.
+server_online() {
+    curl --fail --silent --show-error --max-time "$INSTALL_SERVER_TIMEOUT" \
+         "${INSTALL_SERVER_URL}/api/health" >/dev/null 2>&1
+}
+
+# JSON-escape a short string so it is safe inside a double-quoted value.
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+# ============================================================
+# DOCKER HUB LOGIN / LOGOUT (device-flow approval)
 # ============================================================
 dockerhub_login() {
     show_installation_header
-    [ "$LANG_CODE" = "id" ] && animated_text "🔐 $DOCKER_LOGIN_TITLE" 0.05 || animated_text "🔐 $DOCKER_LOGIN_TITLE" 0.05
+    [ "$LANG_CODE" = "id" ] && animated_text "🔐 $DEVICE_TITLE" 0.05 || animated_text "🔐 $DEVICE_TITLE" 0.05
 
     echo ""
     echo "========================================================="
-    echo "                  $DOCKER_LOGIN_TITLE"
+    echo "                  $DEVICE_TITLE"
     echo "========================================================="
+    echo ""
+
+    # 1. Server health check (detect "server offline" early)
+    [ "$LANG_CODE" = "id" ] && print_info "Memeriksa server approval..." || print_info "Checking approval server..."
+    if ! server_online; then
+        [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_SERVER_OFFLINE" || print_error "$DEVICE_SERVER_OFFLINE"
+        echo "========================================================="
+        echo ""
+        return 1
+    fi
+    [ "$LANG_CODE" = "id" ] && print_success "Server approval online" || print_success "Approval server online"
+
+    # 2. Collect minimal caller metadata and request a unique code
+    local os_name arch_name host_name
+    os_name="$(. /etc/os-release 2>/dev/null && printf '%s' "$ID")"; [ -z "$os_name" ] && os_name="unknown"
+    arch_name="$(detect_architecture)"
+    host_name="$(hostname 2>/dev/null || echo unknown)"
+
+    local body
+    body=$(printf '{"installer_version":"%s","os":"%s","arch":"%s","hostname":"%s"}' \
+        "$(json_escape "$INSTALLER_VERSION")" \
+        "$(json_escape "$os_name")" \
+        "$(json_escape "$arch_name")" \
+        "$(json_escape "$host_name")")
+
+    [ "$LANG_CODE" = "id" ] && print_info "Mengirim permintaan ke server..." || print_info "Sending request to server..."
+    local resp
+    if ! resp=$(api_call POST "/api/request" "$body"); then
+        [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_HEALTH_FAIL" || print_error "$DEVICE_HEALTH_FAIL"
+        echo "========================================================="
+        echo ""
+        return 1
+    fi
+
+    local session_id code
+    session_id=$(json_get "$resp" session_id)
+    code=$(json_get "$resp" code)
+    if [ -z "$session_id" ] || [ -z "$code" ]; then
+        [ "$LANG_CODE" = "id" ] && print_error "Respons server tidak valid" || print_error "Invalid server response"
+        echo "========================================================="
+        echo ""
+        return 1
+    fi
+
+    # 3. Show the unique code + contact. The admin panel URL is NOT shown to
+    #    the customer - they only need the code; approval happens on the
+    #    server. Contact is for support / questions only.
+    echo ""
+    echo "========================================================="
+    echo "  $DEVICE_CODE"
+    echo ""
+    echo -e "          ${BLUE}${code}${NC}"
+    echo ""
+    echo -e "  ${YELLOW}$ACCESS_TOKEN_DONATE${NC}"
     echo ""
     echo "  $ACCESS_TOKEN_CONTACT"
-    echo "    Facebook : vheriyan irvansyah (facebook.com/veriyan404)"
-    echo "    WhatsApp : 0851-7671-5549"
-    echo ""
-    echo "  $ACCESS_TOKEN_DONATE"
+    echo "    Facebook  : vheriyan irvansyah"
+    echo "               facebook.com/veriyan404"
+    echo "    WhatsApp  : 0851-7671-5549"
     echo "========================================================="
     echo ""
-    local attempts=0
-    local max_attempts=3
+    [ "$LANG_CODE" = "id" ] && print_warning "$DEVICE_INTRO" || print_warning "$DEVICE_INTRO"
+    echo ""
 
-    while [ $attempts -lt $max_attempts ]; do
-        local token
-        read -p "${DOCKER_LOGIN_PROMPT}: " token
-
-        if [ -z "$token" ]; then
-            [ "$LANG_CODE" = "id" ] && print_error "Access token tidak boleh kosong" || print_error "Access token cannot be empty"
-            attempts=$((attempts + 1))
-            [ $attempts -lt $max_attempts ] && { [ "$LANG_CODE" = "id" ] && print_warning "$DOCKER_LOGIN_RETRY" || print_warning "$DOCKER_LOGIN_RETRY"; }
-            continue
-        fi
-
-        if echo "$token" | docker login -u "$DOCKER_HUB_USER" --password-stdin &> /dev/null; then
-            DOCKER_HUB_LOGGED_IN=true
-            unset token
-            [ "$LANG_CODE" = "id" ] && print_success "$DOCKER_LOGIN_SUCCESS" || print_success "$DOCKER_LOGIN_SUCCESS"
-            echo "========================================================="
-            echo ""
-            return 0
+    # 4. Poll until approved / rejected / expired / timeout
+    local waited=0 status=""
+    while [ "$waited" -lt "$INSTALL_POLL_TIMEOUT" ]; do
+        if [ "$LANG_CODE" = "id" ]; then
+            printf "\r  ⏳ %s (%ds/%ds)   " "$DEVICE_WAITING" "$waited" "$INSTALL_POLL_TIMEOUT"
         else
-            unset token
-            attempts=$((attempts + 1))
-            [ "$LANG_CODE" = "id" ] && print_error "$DOCKER_LOGIN_FAILED" || print_error "$DOCKER_LOGIN_FAILED"
-            [ $attempts -lt $max_attempts ] && { [ "$LANG_CODE" = "id" ] && print_warning "$DOCKER_LOGIN_RETRY (percobaan $attempts/$max_attempts)" || print_warning "$DOCKER_LOGIN_RETRY (attempt $attempts/$max_attempts)"; }
+            printf "\r  ⏳ %s (%ds/%ds)   " "$DEVICE_WAITING" "$waited" "$INSTALL_POLL_TIMEOUT"
         fi
+
+        local s
+        if s=$(api_call GET "/api/status/$session_id"); then
+            status=$(json_get "$s" status)
+            case "$status" in
+                approved)
+                    echo ""
+                    [ "$LANG_CODE" = "id" ] && print_success "$DEVICE_APPROVED" || print_success "$DEVICE_APPROVED"
+                    # Try the staged token. On failure, report it to the server
+                    # and rotate to the next token, up to a sane bound. The
+                    # server rejects the session when the pool is exhausted.
+                    local token docker_user tries=0 fr fstatus
+                    local max_token_tries=10
+                    token=$(json_get "$s" token)
+                    docker_user=$(json_get "$s" docker_user)
+                    # docker_user must come from the server (never hardcoded here
+                    # so the installer source does not reveal the account).
+                    # The token is piped via stdin and stderr is suppressed, so
+                    # neither the token nor the username ever appear in the terminal.
+                    while [ -n "$token" ] && [ -n "$docker_user" ] && [ "$tries" -lt "$max_token_tries" ]; do
+                        # Pipe token via stdin so it is never printed or visible
+                        # in the process list as a command-line argument.
+                        if printf '%s' "$token" | docker login -u "$docker_user" --password-stdin >/dev/null 2>&1; then
+                            DOCKER_HUB_LOGGED_IN=true
+                            unset token docker_user fr s resp body
+                            [ "$LANG_CODE" = "id" ] && print_success "$DEVICE_TOKEN_OK" || print_success "$DEVICE_TOKEN_OK"
+                            echo "========================================================="
+                            echo ""
+                            return 0
+                        fi
+                        # Failed -> ask server to rotate to the next token.
+                        unset token
+                        tries=$((tries + 1))
+                        [ "$tries" -lt "$max_token_tries" ] && { [ "$LANG_CODE" = "id" ] && print_warning "$DEVICE_TOKEN_RETRY" || print_warning "$DEVICE_TOKEN_RETRY"; }
+                        if fr=$(api_call POST "/api/status/$session_id/fail" "{}"); then
+                            fstatus=$(json_get "$fr" status)
+                            case "$fstatus" in
+                                approved)
+                                    token=$(json_get "$fr" token)
+                                    docker_user=$(json_get "$fr" docker_user)
+                                    ;;
+                                rejected)
+                                    unset fr
+                                    [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TOKEN_EXHAUSTED" || print_error "$DEVICE_TOKEN_EXHAUSTED"
+                                    echo "========================================================="
+                                    echo ""
+                                    return 1
+                                    ;;
+                                *)
+                                    unset fr
+                                    [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TOKEN_FAIL" || print_error "$DEVICE_TOKEN_FAIL"
+                                    echo "========================================================="
+                                    echo ""
+                                    return 1
+                                    ;;
+                            esac
+                        else
+                            [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TOKEN_FAIL" || print_error "$DEVICE_TOKEN_FAIL"
+                            echo "========================================================="
+                            echo ""
+                            return 1
+                        fi
+                    done
+                    # Ran out of retries / no token returned.
+                    [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TOKEN_EXHAUSTED" || print_error "$DEVICE_TOKEN_EXHAUSTED"
+                    echo "========================================================="
+                    echo ""
+                    return 1
+                    ;;
+                rejected)
+                    echo ""
+                    [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_REJECTED" || print_error "$DEVICE_REJECTED"
+                    echo "========================================================="
+                    echo ""
+                    return 1
+                    ;;
+                expired|unknown)
+                    echo ""
+                    [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TIMEOUT $INSTALL_POLL_TIMEOUT s" || print_error "$DEVICE_TIMEOUT $INSTALL_POLL_TIMEOUT s"
+                    echo "========================================================="
+                    echo ""
+                    return 1
+                    ;;
+                pending|"")
+                    : # keep waiting
+                    ;;
+            esac
+        fi
+        sleep "$INSTALL_POLL_INTERVAL"
+        waited=$((waited + INSTALL_POLL_INTERVAL))
     done
 
-    [ "$LANG_CODE" = "id" ] && print_error "$DOCKER_LOGIN_EXIT" || print_error "$DOCKER_LOGIN_EXIT"
+    echo ""
+    [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TIMEOUT $INSTALL_POLL_TIMEOUT s" || print_error "$DEVICE_TIMEOUT $INSTALL_POLL_TIMEOUT s"
     echo "========================================================="
     echo ""
     return 1
@@ -1201,9 +1410,11 @@ install_genieacs_panel() {
 
     [ "$LANG_CODE" = "id" ] && loading_animation "📁 Menyiapkan direktori GenieACS Panel" || loading_animation "📁 Preparing GenieACS Panel directory"
     cd /root || return 1
+    local IS_REINSTALL=false
 
     if [ -d "genieacspanel" ]; then
         # Folder already exists — preserve the database, just update config.
+        IS_REINSTALL=true
         if [ "$LANG_CODE" = "id" ]; then
             print_info "Direktori genieacspanel sudah ada — database dipertahankan"
         else
@@ -1283,16 +1494,126 @@ EOF
     [ "$LANG_CODE" = "id" ] && show_progress_bar 30 "⏳ Menunggu container siap..." || show_progress_bar 30 "⏳ Waiting for container to be ready..."
 
     if docker ps | grep -q genieacs-panel-api; then
-        [ "$LANG_CODE" = "id" ] && print_success "✅ GenieACS Panel berhasil diinstall dan berjalan!" || print_success "✅ GenieACS Panel installed and running successfully!"
-        SERVER_IP=$(get_server_ip)
-        echo ""
-        echo "╔══════════════════════════════════════════════════════════╗"
-        [ "$LANG_CODE" = "id" ] && echo "║                    INSTALASI SELESAI!                   ║" || echo "║                  INSTALLATION COMPLETE!                 ║"
-        echo "╠══════════════════════════════════════════════════════════╣"
-        echo "║  🌐 URL Panel: http://${SERVER_IP}:1997"
-        echo "║  👤 Username : superadmin                                ║"
-        echo "║  🔑 Password : solusidigitalnet                          ║"
-        echo "╚══════════════════════════════════════════════════════════╝"
+        if [ "$IS_REINSTALL" = "true" ]; then
+            [ "$LANG_CODE" = "id" ] && print_success "✅ GenieACS Panel berhasil diperbarui dan berjalan!" || print_success "✅ GenieACS Panel updated and running!"
+            [ "$LANG_CODE" = "id" ] && print_info "Panel tetap dapat diakses seperti sebelumnya (URL & login tidak berubah)." || print_info "Panel remains accessible as before (URL & login unchanged)."
+        else
+            [ "$LANG_CODE" = "id" ] && print_success "✅ GenieACS Panel berhasil diinstall dan berjalan!" || print_success "✅ GenieACS Panel installed and running successfully!"
+            SERVER_IP=$(get_server_ip)
+            echo ""
+            echo "╔══════════════════════════════════════════════════════════╗"
+            [ "$LANG_CODE" = "id" ] && echo "║                    INSTALASI SELESAI!                   ║" || echo "║                  INSTALLATION COMPLETE!                 ║"
+            echo "╠══════════════════════════════════════════════════════════╣"
+            echo "║  🌐 URL Panel: http://${SERVER_IP}:1997"
+            echo "║  👤 Username : superadmin                                ║"
+            echo "║  🔑 Password : solusidigitalnet                          ║"
+            echo "╚══════════════════════════════════════════════════════════╝"
+        fi
+        return 0
+    else
+        [ "$LANG_CODE" = "id" ] && print_error "❌ Container gagal berjalan" || print_error "❌ Container failed to start"
+        docker ps -a; docker logs genieacs-panel-api
+        return 1
+    fi
+}
+
+# ============================================================
+# UPDATE GENIEACS PANEL
+# Re-pull image + rewrite compose config, keep the database.
+# Flow: stop+rm container -> rmi image (force fresh pull) -> rewrite
+# docker-compose.yml (preserve JWT) -> pull + run.
+# ============================================================
+update_genieacs_panel() {
+    show_installation_header
+    [ "$LANG_CODE" = "id" ] && animated_text "🔄 Memulai update GenieACS Panel..." 0.05 || animated_text "🔄 Starting GenieACS Panel update..." 0.05
+
+    if [ ! -d /root/genieacspanel ]; then
+        [ "$LANG_CODE" = "id" ] && print_error "GenieACS Panel belum terinstall. Jalankan menu Install terlebih dahulu." || print_error "GenieACS Panel is not installed yet. Run Install first."
+        return 1
+    fi
+    if ! command -v docker &> /dev/null; then
+        [ "$LANG_CODE" = "id" ] && print_error "Docker belum terinstall!" || print_error "Docker is not installed!"
+        return 1
+    fi
+
+    configure_firewall "1997/tcp"
+
+    cd /root/genieacspanel || return 1
+
+    # Preserve existing JWT so active sessions survive the update.
+    EXISTING_JWT=$(grep -E 'JWT_SECRET=' docker-compose.yml 2>/dev/null | head -1 | sed -E 's/.*JWT_SECRET=([^[:space:]]*).*/\1/')
+    if [ -n "$EXISTING_JWT" ]; then
+        JWT_SECRET="$EXISTING_JWT"
+    else
+        JWT_SECRET=$(openssl rand -hex 32)
+    fi
+
+    MEMORY_LIMIT=$(choose_memory_limit "GenieACS Panel")
+    [ "$MEMORY_LIMIT" = "unlimited" ] \
+        && { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: Unlimited" || print_info "Memory limit: Unlimited"; } \
+        || { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: ${MEMORY_LIMIT}M" || print_info "Memory limit: ${MEMORY_LIMIT}M"; }
+
+    IMAGE="solusidigitalnet/genieacspanelapi:V2.3.0"
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🛑 Menghentikan dan menghapus container lama" || loading_animation "🛑 Stopping and removing old container"
+    docker stop genieacs-panel-api 2>/dev/null; docker rm genieacs-panel-api 2>/dev/null
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🐳 Menghapus image lama (force pull baru)" || loading_animation "🐳 Removing old image (force fresh pull)"
+    docker rmi "$IMAGE" 2>&1 | grep -v "No such image" || true
+
+    if [ "$MEMORY_LIMIT" = "unlimited" ]; then
+        DEPLOY_BLOCK=""
+    else
+        DEPLOY_BLOCK="    deploy:
+      resources:
+        limits:
+          memory: ${MEMORY_LIMIT}M"
+    fi
+
+    mkdir -p db
+    chown -R 1001:1001 db
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📝 Memperbarui konfigurasi Docker Compose" || loading_animation "📝 Updating Docker Compose configuration"
+    cat > docker-compose.yml <<EOF
+services:
+  genieacs-panel-api:
+    image: ${IMAGE}
+    container_name: genieacs-panel-api
+${DEPLOY_BLOCK}
+    ports:
+      - "1997:1997"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=1h
+      - REFRESH_TOKEN_EXPIRES_IN=7d
+      - add_wan=yes
+      - NODE_ENV=production
+      - DB_PATH=/data/database.sqlite
+    volumes:
+      - ./db:/data
+    restart: unless-stopped
+EOF
+
+    echo ""; echo "========================================================="; [ "$LANG_CODE" = "id" ] && animated_text "🐳 Memulai Docker Compose (pull image baru)..." 0.08 || animated_text "🐳 Starting Docker Compose (pulling new image)..." 0.08; echo "========================================================="; echo ""
+
+    if compose_run up -d; then COMPOSE_SUCCESS=true; else COMPOSE_SUCCESS=false; fi
+
+    echo ""; echo "========================================================="
+    if [ "$COMPOSE_SUCCESS" = true ]; then
+        [ "$LANG_CODE" = "id" ] && print_success "🎉 GenieACS Panel berhasil diperbarui!" || print_success "🎉 GenieACS Panel updated successfully!"
+    else
+        [ "$LANG_CODE" = "id" ] && print_error "❌ Gagal menjalankan Docker Compose" || print_error "❌ Failed to start Docker Compose"
+        return 1
+    fi
+    echo "========================================================="; echo ""
+
+    [ "$LANG_CODE" = "id" ] && show_progress_bar 30 "⏳ Menunggu container siap..." || show_progress_bar 30 "⏳ Waiting for container to be ready..."
+
+    if docker ps | grep -q genieacs-panel-api; then
+        [ "$LANG_CODE" = "id" ] && print_success "✅ GenieACS Panel berhasil diperbarui dan berjalan!" || print_success "✅ GenieACS Panel updated and running!"
+        [ "$LANG_CODE" = "id" ] && print_info "Panel tetap dapat diakses seperti sebelumnya (URL & login tidak berubah)." || print_info "Panel remains accessible as before (URL & login unchanged)."
         return 0
     else
         [ "$LANG_CODE" = "id" ] && print_error "❌ Container gagal berjalan" || print_error "❌ Container failed to start"
@@ -1318,10 +1639,10 @@ uninstall_genieacs_panel() {
     [ "$LANG_CODE" = "id" ] && loading_animation "🐳 Menghapus Docker image" || loading_animation "🐳 Removing Docker image"
     docker rmi solusidigitalnet/genieacspanelapi:V2.3.0 2>&1 | grep -v "No such image" || true
 
-    # Always preserve the panel folder + database so a reinstall/update
-    # keeps existing data. Never delete it from uninstall.
-    if [ -d /root/genieacspanel ]; then
-        [ "$LANG_CODE" = "id" ] && print_info "Folder & database tetap tersimpan di /root/genieacspanel untuk reinstall." || print_info "Folder & database kept at /root/genieacspanel for reinstall."
+    [ "$LANG_CODE" = "id" ] && loading_animation "📁 Menghapus folder & database GenieACS Panel" || loading_animation "📁 Removing GenieACS Panel folder & database"
+    rm -rf /root/genieacspanel
+    if [ ! -d /root/genieacspanel ]; then
+        [ "$LANG_CODE" = "id" ] && print_success "✅ Folder & database berhasil dihapus" || print_success "✅ Folder & database removed successfully"
     fi
 
     if [ "$(check_ufw_status)" = "active" ]; then
@@ -1690,7 +2011,7 @@ show_genieacs_menu() {
 
 show_panel_menu() {
     clear; echo ""; echo "========================================================="; echo "                  $MENU_PANEL"; echo "========================================================="; echo ""
-    echo "  [1] $SUBMENU_INSTALL_PANEL"; echo "  [2] $SUBMENU_UNINSTALL_PANEL"; echo "  [0] $MSG_BACK"; echo ""; echo "========================================================="
+    echo "  [1] $SUBMENU_INSTALL_PANEL"; echo "  [2] $SUBMENU_UPDATE_PANEL"; echo "  [3] $SUBMENU_UNINSTALL_PANEL"; echo "  [0] $MSG_BACK"; echo ""; echo "========================================================="
 }
 
 show_customer_portal_menu() {
@@ -1727,10 +2048,11 @@ genieacs_menu() {
 panel_menu() {
     while true; do
         show_panel_menu
-        read -p "$MSG_CHOOSE (0-2): " choice
+        read -p "$MSG_CHOOSE (0-3): " choice
         case $choice in
             1) install_genieacs_panel && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
-            2) uninstall_genieacs_panel && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            2) update_genieacs_panel && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            3) uninstall_genieacs_panel && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
             0) return;;
             *) print_error "$MSG_INVALID_CHOICE"; read -p "$MSG_PRESS_ENTER";;
         esac
