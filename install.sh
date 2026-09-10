@@ -830,10 +830,11 @@ dockerhub_login() {
         return 1
     fi
 
-    local session_id code auto_approved
+    local session_id code auto_approved auto_rejected
     session_id=$(json_get "$resp" session_id)
     code=$(json_get "$resp" code)
     auto_approved=$(json_get "$resp" auto_approved)
+    auto_rejected=$(json_get "$resp" auto_rejected)
     if [ -z "$session_id" ] || [ -z "$code" ]; then
         [ "$LANG_CODE" = "id" ] && print_error "Respons server tidak valid" || print_error "Invalid server response"
         echo "========================================================="
@@ -853,7 +854,19 @@ dockerhub_login() {
         return $?
     fi
 
-    # 3b. Manual approval flow: show the unique code + contact, then poll
+    # 3b. Blocked device: the admin has revoked this device. Abort
+    #     immediately without showing the approval code or polling.
+    if [ "$auto_rejected" = "true" ]; then
+        echo ""
+        [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_REJECTED" || print_error "$DEVICE_REJECTED"
+        [ "$LANG_CODE" = "id" ] && print_warning "Device ini telah diblokir oleh admin. Hubungi admin untuk informasi." || print_warning "This device has been blocked by the admin. Contact admin for info."
+        echo "========================================================="
+        echo ""
+        unset resp body
+        return 1
+    fi
+
+    # 3c. Manual approval flow: show the unique code + contact, then poll
     #     until the admin approves/rejects or the request times out.
     echo ""
     echo "========================================================="
