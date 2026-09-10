@@ -846,7 +846,6 @@ dockerhub_login() {
     if [ "$auto_approved" = "true" ]; then
         echo ""
         [ "$LANG_CODE" = "id" ] && print_success "$DEVICE_AUTO_RECOGNIZED" || print_success "$DEVICE_AUTO_RECOGNIZED"
-        [ -n "$device_id" ] && { [ "$LANG_CODE" = "id" ] && print_info "Device ID: ${device_id:0:16}..." || print_info "Device ID: ${device_id:0:16}..."; }
         echo "========================================================="
         echo ""
         unset resp body
