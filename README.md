@@ -20,7 +20,7 @@ d8'   .8P 88.  .88 88 88.  .88       88 88 88    .8P 88 88.  .88 88   88   88.  
 </pre>
 </sub>
 
-**toolkit deploy ACS stack — dengan approval gateway & auto-login device** ☕
+**toolkit deploy ACS stack — cepat, bersih, no drama** ☕
 
 <br>
 
@@ -60,36 +60,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/zlabkeeb/DidotsServ/main/ins
 Pilih menu (1-6):
 ```
 
-> Alur startup: **preflight check** (OS, arch, internet, deps, Docker, LXC/nesting) → cek Docker (auto-install jika belum ada) → **login Docker Hub via approval gateway** → menu utama.
+> Alur startup: **preflight check** (OS, arch, internet, deps, Docker) → cek Docker (auto-install jika belum ada) → **login Docker Hub otomatis** → menu utama.
 
-### Approval gateway & auto-login
+### Login Docker Hub
 
-Installer tidak langsung minta password Docker Hub. Alurnya:
+Installer handle login Docker Hub otomatis. Saat install.sh jalan, tunggu sebentar — installer akan lanjut sendiri ke menu utama.
 
-```
-install.sh                 Gateway (server/)          Admin (dashboard)
-     │  POST /api/request ─────► generate kode + session_id
-     │  ◄── code, session_id ──┘            │ push notif (socket.io) ──► kartu pending
-     │                                       │
-     │  ── Device ID (SHA-256) ──►           │
-     │     machine-id + product_uuid         │
-     │     + hostname                         │
-     │                                       │
-     │  ◄── auto_approved:true ── (trusted)  │  (skip approval, no admin action)
-     │     OR                                 │
-     │  ◄── auto_rejected:true ── (blocked)  │  (admin sudah block device ini)
-     │     OR                                 │
-     │  GET /api/status/:id (poll) ──►       │ ◄── POST /api/admin/approve ── klik Approve
-     │  ◄── approved + token ──              │
-     │  docker login --password-stdin        │
-     │  unset token + docker logout (trap)   │
-```
-
-- **Device ID** = `SHA-256(machine-id + product_uuid + hostname)` — unik per mesin, stabil, tidak bisa ditebak (256-bit).
-- **Auto-login** — device yang sudah di-approve sekali tidak perlu approve lagi. Saat install.sh dijalankan lagi di mesin yang sama, server kenali Device ID → auto-approved → token langsung dikirim.
-- **Device blocked** — admin bisa block device via dashboard. Saat install.sh dijalankan di mesin yang di-block, langsung auto-reject (tidak masuk antrian pending).
-- **Setiap run tetap tercatat** — session + audit log selalu dibuat, baik auto-login maupun manual.
-- **Token Docker Hub tidak pernah tampil** — dikirim via `--password-stdin`, lalu `unset`, dan `docker logout` otomatis saat installer exit.
+> Device yang sudah pernah install → install berikutnya di mesin yang sama langsung lanjut tanpa tunggu.
 
 ### Submenu
 
@@ -182,8 +159,8 @@ install.sh                 Gateway (server/)          Admin (dashboard)
 
 ```
 DidotsServ/
-├── install.sh               ← installer (device-flow + auto-login, v9)
-├── db/                      ← seed data ACS (BSON, di-download dari GitHub Raw)
+├── install.sh               ← entry point (v9)
+├── db/                      ← seed data ACS (BSON, di-download otomatis saat install)
 │   ├── cache.bson
 │   ├── config.bson
 │   ├── permissions.bson
@@ -192,32 +169,8 @@ DidotsServ/
 │   ├── users.bson
 │   ├── virtualParameters.bson
 │   └── *.metadata.json
-├── server/                  ← approval gateway (Node.js + Express + SQLite)
-│   ├── package.json
-│   ├── ecosystem.config.cjs  ← PM2 config
-│   ├── .env.example          ← template konfigurasi
-│   ├── src/                  ← backend (10 modul)
-│   │   ├── index.js          ← Express + socket.io + helmet
-│   │   ├── config.js         ← env + validasi
-│   │   ├── db.js             ← node:sqlite (zero native deps)
-│   │   ├── store.js          ← sessions + device auto-login + token rotation
-│   │   ├── audit.js          ← audit log persisten
-│   │   ├── auth.js           ← admin bcrypt + anti-lockout
-│   │   ├── middleware.js     ← requireAdmin + IP guard + anti-CSRF
-│   │   ├── ratelimit.js      ← rate limit per IP
-│   │   ├── routes-client.js  ← /api/health, /request, /status/:id
-│   │   └── routes-admin.js    ← login, approve, tokens, devices, admins, audit
-│   ├── data/                 ← SQLite (auto-created, jangan commit)
-│   │   └── gateway.db
-│   └── public/              ← dashboard admin (SPA)
-│       ├── index.html
-│       ├── app.js
-│       ├── style.css
-│       └── favicon.svg
 └── README.md
 ```
-
-> **install.sh ada di root** (luar folder `server/`). Installer ini independen — bisa jalan di mesin mana pun, asalkan bisa reach approval gateway. Folder `server/` deploy terpisah di server yang hosting dashboard approval.
 
 ---
 
@@ -253,6 +206,10 @@ access code :
 </td>
 </tr>
 </table>
+
+> ⚠️ Ganti password setelah login pertama, jangan sampe lupa.
+
+---
 
 <div align="center">
 <sub>· solusidigitalnet · 2026</sub>
