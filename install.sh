@@ -1,12 +1,15 @@
 #!/bin/bash
 
 # ============================================================
-# CONFIGURATION - Approval Gateway (device flow)
+# CONFIGURATION - Approval Gateway (device flow + auto-login)
 # ============================================================
-# install.sh requests a unique code from this server, waits for an
-# admin to click "Approve" on the dashboard, then receives a Docker
-# Hub access token from the server. Must be HTTPS. If the server is
-# down, the installer aborts with a clear "server offline" message.
+# install.sh computes a stable Device ID (SHA-256 of machine-id +
+# product_uuid + hostname) and sends it with each request. The server
+# auto-approves devices it has already trusted (no manual approval needed);
+# unknown devices follow the manual flow: show a unique code, wait for an
+# admin to click "Approve" on the dashboard, then receive a Docker Hub
+# access token. Must be HTTPS. If the server is down, the installer aborts
+# with a clear "server offline" message.
 INSTALL_SERVER_URL="https://installtools.solusi-digital.net"
 INSTALL_SERVER_TIMEOUT=5      # health-check timeout in seconds
 INSTALL_POLL_INTERVAL=3       # seconds between status polls
@@ -21,7 +24,7 @@ GITHUB_BRANCH="main"
 GITHUB_RAW_BASE="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}"
 DB_URL="${GITHUB_RAW_BASE}/db"
 
-INSTALLER_VERSION="8"
+INSTALLER_VERSION="9"
 
 # Detect system language
 LANG_CODE="${LANG:0:2}"
@@ -52,6 +55,7 @@ case $LANG_CODE in
         PREFLIGHT_DOCKER="Docker"
         PREFLIGHT_PASS="LOLOS"
         PREFLIGHT_FAIL="GAGAL"
+        PREFLIGHT_LXC="LXC / Nesting"
         PREFLIGHT_INSTALL_DOCKER_PROMPT="Docker belum terinstall. Install Docker sekarang?"
         DOCKER_LOGIN_TITLE="AKSES TOKEN DIBUTUHKAN"
         DOCKER_LOGIN_PROMPT="Masukkan Akses Token"
@@ -77,7 +81,15 @@ case $LANG_CODE in
         DEVICE_TOKEN_FAIL="Login Docker Hub gagal dengan token dari server"
         DEVICE_TOKEN_RETRY="Token gagal, mencoba token lain..."
         DEVICE_TOKEN_EXHAUSTED="Semua token habis/gagal. Hubungi admin."
+        DEVICE_AUTO_RECOGNIZED="Device dikenali — auto-login, melewati approval"
         DEVICE_HEALTH_FAIL="Tidak dapat menghubungi server approval"
+        LXC_NO_NESTING_TITLE="DOCKER TIDAK BISA JALAN DI LXC TANPA NESTING"
+        LXC_NO_NESTING_MSG="Container LXC terdeteksi tapi fitur Nesting belum aktif.
+Docker daemon tidak akan bisa start, dan GenieACS akan gagal.
+Aktifkan Nesting di host Proxmox:
+  pct set <CTID> -features nesting=1
+  lalu restart container ini.
+Setelah itu jalankan installer lagi."
         EXIT_MESSAGE="Keluar dari installer"
 
         MENU_DOCKER="Docker"
@@ -122,6 +134,7 @@ case $LANG_CODE in
         PREFLIGHT_DOCKER="Docker"
         PREFLIGHT_PASS="PASS"
         PREFLIGHT_FAIL="FAIL"
+        PREFLIGHT_LXC="LXC / Nesting"
         PREFLIGHT_INSTALL_DOCKER_PROMPT="Docker is not installed. Install Docker now?"
         DOCKER_LOGIN_TITLE="ACCESS TOKEN REQUIRED"
         DOCKER_LOGIN_PROMPT="Enter Access Token"
@@ -147,7 +160,15 @@ case $LANG_CODE in
         DEVICE_TOKEN_FAIL="Docker Hub login failed with server-issued token"
         DEVICE_TOKEN_RETRY="Token failed, trying another token..."
         DEVICE_TOKEN_EXHAUSTED="All tokens exhausted/failed. Contact admin."
+        DEVICE_AUTO_RECOGNIZED="Device recognized — auto-login, skipping approval"
         DEVICE_HEALTH_FAIL="Cannot reach approval server"
+        LXC_NO_NESTING_TITLE="DOCKER CANNOT RUN IN LXC WITHOUT NESTING"
+        LXC_NO_NESTING_MSG="An LXC container was detected but the Nesting feature is not enabled.
+The Docker daemon will fail to start, and GenieACS will fail.
+Enable Nesting on the Proxmox host:
+  pct set <CTID> -features nesting=1
+  then restart this container.
+After that, run the installer again."
         EXIT_MESSAGE="Exiting installer"
 
         MENU_DOCKER="Docker"
@@ -228,6 +249,29 @@ detect_os() {
     else
         echo "unknown:unknown:unknown:false:ubuntu"
     fi
+}
+
+# Detect LXC/container environments. Docker needs nesting enabled inside
+# LXC containers (Proxmox: Features -> Nesting). Without it, `docker` installs
+# fine but the daemon cannot start, so GenieACS fails with a cryptic error.
+detect_lxc() {
+    local is_lxc=false nesting_ok=false
+    # /proc/1/cgroup: LXC containers show "lxc" in the cgroup path.
+    # /run/.containerenv or /.dockerenv also indicate a container.
+    if grep -qa 'lxc' /proc/1/cgroup 2>/dev/null \
+        || grep -qa 'docker' /proc/1/cgroup 2>/dev/null \
+        || [ -f /.dockerenv ] || [ -f /run/.containerenv ] \
+        || [ -n "$(cat /proc/1/environ 2>/dev/null | tr '\0' '\n' | grep -i '^container=')" ]; then
+        is_lxc=true
+    fi
+    # nesting probe: in a non-nested LXC, /sys/fs/cgroup is read-only and
+    # cgroup controllers are not writable. Nested containers can write to it.
+    if [ "$is_lxc" = true ]; then
+        if [ -w /sys/fs/cgroup ] 2>/dev/null || mountpoint -q /sys/fs/cgroup 2>/dev/null; then
+            nesting_ok=true
+        fi
+    fi
+    echo "$is_lxc:$nesting_ok"
 }
 
 wait_for_dpkg_lock() {
@@ -556,11 +600,35 @@ preflight_check() {
     fi
     printf "  %-30s %-25s [ %s ]\n" "$PREFLIGHT_DOCKER" "$check_value" "$check_status"
 
+    # LXC / container nesting (Proxmox). Docker needs nesting enabled inside
+    # LXC, otherwise the daemon won't start and the installer fails later.
+    local lxc_info lxc_is lxc_nesting
+    lxc_info=$(detect_lxc)
+    IFS=':' read -r lxc_is lxc_nesting <<< "$lxc_info"
+    if [ "$lxc_is" = "true" ]; then
+        if [ "$lxc_nesting" = "true" ]; then
+            check_value="LXC (nesting OK)"
+            check_status="$PREFLIGHT_PASS"
+        else
+            check_value="LXC (nesting OFF)"
+            check_status="$PREFLIGHT_FAIL"
+            fatal=$((fatal + 1))
+        fi
+        printf "  %-30s %-25s [ %s ]\n" "$PREFLIGHT_LXC" "$check_value" "$check_status"
+    fi
+
     echo ""
     echo "========================================================="
 
     if [ $fatal -gt 0 ]; then
         [ "$LANG_CODE" = "id" ] && print_error "$fatal cek kesiapan gagal. Installer dihentikan." || print_error "$fatal readiness checks failed. Installer aborted."
+        if [ "$lxc_is" = "true" ] && [ "$lxc_nesting" != "true" ]; then
+            echo ""
+            echo "========================================================="
+            [ "$LANG_CODE" = "id" ] && print_warning "$LXC_NO_NESTING_TITLE" || print_warning "$LXC_NO_NESTING_TITLE"
+            echo -e "$LXC_NO_NESTING_MSG"
+            echo "========================================================="
+        fi
         echo "========================================================="
         echo ""
         return 1
@@ -613,6 +681,108 @@ server_online() {
 # JSON-escape a short string so it is safe inside a double-quoted value.
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
+# Build a stable, unique Device ID (SHA-256) from machine-id + product_uuid +
+# hostname. The approval gateway uses this to recognize a device that was
+# approved before and auto-login without manual approval. Falls back to any
+# available identifier so the hash is still stable on minimal hosts (WSL/VM).
+collect_device_id() {
+    local mid puid host raw
+    if [ -f /etc/machine-id ] && [ -s /etc/machine-id ]; then
+        mid=$(tr -d '[:space:]' < /etc/machine-id)
+    elif [ -f /var/lib/dbus/machine-id ] && [ -s /var/lib/dbus/machine-id ]; then
+        mid=$(tr -d '[:space:]' < /var/lib/dbus/machine-id)
+    else
+        mid=""
+    fi
+    # /sys/class/dmi/id/product_uuid requires root (install.sh runs as root).
+    if [ -r /sys/class/dmi/id/product_uuid ]; then
+        puid=$(tr -d '[:space:]' < /sys/class/dmi/id/product_uuid 2>/dev/null)
+    fi
+    [ -z "$puid" ] && puid=""
+    host=$(hostname 2>/dev/null || echo "")
+
+    raw="${mid}|${puid}|${host}"
+    if [ -z "$mid" ] && [ -z "$puid" ] && [ -z "$host" ]; then
+        echo ""
+        return
+    fi
+    printf '%s' "$raw" | sha256sum | awk '{print $1}'
+}
+
+# Given a session whose status is 'approved', fetch the staged Docker Hub
+# token and perform `docker login`. On failure, ask the server to rotate to
+# the next token in the pool (multi-token). Shared by both the manual-approval
+# poll loop and the auto-login path so token handling stays identical.
+consume_approved_token() {
+    local session_id="$1"
+    local s="${2:-}"
+    local token docker_user tries=0 fr fstatus
+    local max_token_tries=10
+
+    # If a status JSON was passed in (manual approval path already polled and
+    # received the token), use it; otherwise fetch it now (auto-login path).
+    # pollSession delivers the token on the FIRST poll and marks the session
+    # consumed, so a second fetch would return no token - hence the optional
+    # pre-fetched payload.
+    if [ -z "$s" ]; then
+        s=$(api_call GET "/api/status/$session_id") || {
+            [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TOKEN_FAIL" || print_error "$DEVICE_TOKEN_FAIL"
+            echo "========================================================="
+            echo ""
+            return 1
+        }
+    fi
+    token=$(json_get "$s" token)
+    docker_user=$(json_get "$s" docker_user)
+
+    while [ -n "$token" ] && [ -n "$docker_user" ] && [ "$tries" -lt "$max_token_tries" ]; do
+        # Pipe token via stdin so it is never printed or visible in the process list.
+        if printf '%s' "$token" | docker login -u "$docker_user" --password-stdin >/dev/null 2>&1; then
+            DOCKER_HUB_LOGGED_IN=true
+            unset token docker_user fr s
+            [ "$LANG_CODE" = "id" ] && print_success "$DEVICE_TOKEN_OK" || print_success "$DEVICE_TOKEN_OK"
+            echo "========================================================="
+            echo ""
+            return 0
+        fi
+        unset token
+        tries=$((tries + 1))
+        [ "$tries" -lt "$max_token_tries" ] && { [ "$LANG_CODE" = "id" ] && print_warning "$DEVICE_TOKEN_RETRY" || print_warning "$DEVICE_TOKEN_RETRY"; }
+        if fr=$(api_call POST "/api/status/$session_id/fail" "{}"); then
+            fstatus=$(json_get "$fr" status)
+            case "$fstatus" in
+                approved)
+                    token=$(json_get "$fr" token)
+                    docker_user=$(json_get "$fr" docker_user)
+                    ;;
+                rejected)
+                    unset fr
+                    [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TOKEN_EXHAUSTED" || print_error "$DEVICE_TOKEN_EXHAUSTED"
+                    echo "========================================================="
+                    echo ""
+                    return 1
+                    ;;
+                *)
+                    unset fr
+                    [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TOKEN_FAIL" || print_error "$DEVICE_TOKEN_FAIL"
+                    echo "========================================================="
+                    echo ""
+                    return 1
+                    ;;
+            esac
+        else
+            [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TOKEN_FAIL" || print_error "$DEVICE_TOKEN_FAIL"
+            echo "========================================================="
+            echo ""
+            return 1
+        fi
+    done
+    [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TOKEN_EXHAUSTED" || print_error "$DEVICE_TOKEN_EXHAUSTED"
+    echo "========================================================="
+    echo ""
+    return 1
+}
+
 # ============================================================
 # DOCKER HUB LOGIN / LOGOUT (device-flow approval)
 # ============================================================
@@ -636,18 +806,20 @@ dockerhub_login() {
     fi
     [ "$LANG_CODE" = "id" ] && print_success "Server approval online" || print_success "Approval server online"
 
-    # 2. Collect minimal caller metadata and request a unique code
-    local os_name arch_name host_name
+    # 2. Collect caller metadata + stable Device ID for auto-login.
+    local os_name arch_name host_name device_id
     os_name="$(. /etc/os-release 2>/dev/null && printf '%s' "$ID")"; [ -z "$os_name" ] && os_name="unknown"
     arch_name="$(detect_architecture)"
     host_name="$(hostname 2>/dev/null || echo unknown)"
+    device_id="$(collect_device_id)"
 
     local body
-    body=$(printf '{"installer_version":"%s","os":"%s","arch":"%s","hostname":"%s"}' \
+    body=$(printf '{"installer_version":"%s","os":"%s","arch":"%s","hostname":"%s","device_id":"%s"}' \
         "$(json_escape "$INSTALLER_VERSION")" \
         "$(json_escape "$os_name")" \
         "$(json_escape "$arch_name")" \
-        "$(json_escape "$host_name")")
+        "$(json_escape "$host_name")" \
+        "$(json_escape "$device_id")")
 
     [ "$LANG_CODE" = "id" ] && print_info "Mengirim permintaan ke server..." || print_info "Sending request to server..."
     local resp
@@ -658,9 +830,10 @@ dockerhub_login() {
         return 1
     fi
 
-    local session_id code
+    local session_id code auto_approved
     session_id=$(json_get "$resp" session_id)
     code=$(json_get "$resp" code)
+    auto_approved=$(json_get "$resp" auto_approved)
     if [ -z "$session_id" ] || [ -z "$code" ]; then
         [ "$LANG_CODE" = "id" ] && print_error "Respons server tidak valid" || print_error "Invalid server response"
         echo "========================================================="
@@ -668,9 +841,21 @@ dockerhub_login() {
         return 1
     fi
 
-    # 3. Show the unique code + contact. The admin panel URL is NOT shown to
-    #    the customer - they only need the code; approval happens on the
-    #    server. Contact is for support / questions only.
+    # 3a. Auto-login: the server recognized this device from a previous
+    #     approval. Skip the manual approval loop and consume the token now.
+    if [ "$auto_approved" = "true" ]; then
+        echo ""
+        [ "$LANG_CODE" = "id" ] && print_success "$DEVICE_AUTO_RECOGNIZED" || print_success "$DEVICE_AUTO_RECOGNIZED"
+        [ -n "$device_id" ] && { [ "$LANG_CODE" = "id" ] && print_info "Device ID: ${device_id:0:16}..." || print_info "Device ID: ${device_id:0:16}..."; }
+        echo "========================================================="
+        echo ""
+        unset resp body
+        consume_approved_token "$session_id"
+        return $?
+    fi
+
+    # 3b. Manual approval flow: show the unique code + contact, then poll
+    #     until the admin approves/rejects or the request times out.
     echo ""
     echo "========================================================="
     echo "  $DEVICE_CODE"
@@ -691,11 +876,7 @@ dockerhub_login() {
     # 4. Poll until approved / rejected / expired / timeout
     local waited=0 status=""
     while [ "$waited" -lt "$INSTALL_POLL_TIMEOUT" ]; do
-        if [ "$LANG_CODE" = "id" ]; then
-            printf "\r  ⏳ %s (%ds/%ds)   " "$DEVICE_WAITING" "$waited" "$INSTALL_POLL_TIMEOUT"
-        else
-            printf "\r  ⏳ %s (%ds/%ds)   " "$DEVICE_WAITING" "$waited" "$INSTALL_POLL_TIMEOUT"
-        fi
+        printf "\r  ⏳ %s (%ds/%ds)   " "$DEVICE_WAITING" "$waited" "$INSTALL_POLL_TIMEOUT"
 
         local s
         if s=$(api_call GET "/api/status/$session_id"); then
@@ -704,66 +885,11 @@ dockerhub_login() {
                 approved)
                     echo ""
                     [ "$LANG_CODE" = "id" ] && print_success "$DEVICE_APPROVED" || print_success "$DEVICE_APPROVED"
-                    # Try the staged token. On failure, report it to the server
-                    # and rotate to the next token, up to a sane bound. The
-                    # server rejects the session when the pool is exhausted.
-                    local token docker_user tries=0 fr fstatus
-                    local max_token_tries=10
-                    token=$(json_get "$s" token)
-                    docker_user=$(json_get "$s" docker_user)
-                    # docker_user must come from the server (never hardcoded here
-                    # so the installer source does not reveal the account).
-                    # The token is piped via stdin and stderr is suppressed, so
-                    # neither the token nor the username ever appear in the terminal.
-                    while [ -n "$token" ] && [ -n "$docker_user" ] && [ "$tries" -lt "$max_token_tries" ]; do
-                        # Pipe token via stdin so it is never printed or visible
-                        # in the process list as a command-line argument.
-                        if printf '%s' "$token" | docker login -u "$docker_user" --password-stdin >/dev/null 2>&1; then
-                            DOCKER_HUB_LOGGED_IN=true
-                            unset token docker_user fr s resp body
-                            [ "$LANG_CODE" = "id" ] && print_success "$DEVICE_TOKEN_OK" || print_success "$DEVICE_TOKEN_OK"
-                            echo "========================================================="
-                            echo ""
-                            return 0
-                        fi
-                        # Failed -> ask server to rotate to the next token.
-                        unset token
-                        tries=$((tries + 1))
-                        [ "$tries" -lt "$max_token_tries" ] && { [ "$LANG_CODE" = "id" ] && print_warning "$DEVICE_TOKEN_RETRY" || print_warning "$DEVICE_TOKEN_RETRY"; }
-                        if fr=$(api_call POST "/api/status/$session_id/fail" "{}"); then
-                            fstatus=$(json_get "$fr" status)
-                            case "$fstatus" in
-                                approved)
-                                    token=$(json_get "$fr" token)
-                                    docker_user=$(json_get "$fr" docker_user)
-                                    ;;
-                                rejected)
-                                    unset fr
-                                    [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TOKEN_EXHAUSTED" || print_error "$DEVICE_TOKEN_EXHAUSTED"
-                                    echo "========================================================="
-                                    echo ""
-                                    return 1
-                                    ;;
-                                *)
-                                    unset fr
-                                    [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TOKEN_FAIL" || print_error "$DEVICE_TOKEN_FAIL"
-                                    echo "========================================================="
-                                    echo ""
-                                    return 1
-                                    ;;
-                            esac
-                        else
-                            [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TOKEN_FAIL" || print_error "$DEVICE_TOKEN_FAIL"
-                            echo "========================================================="
-                            echo ""
-                            return 1
-                        fi
-                    done
-                    # Ran out of retries / no token returned.
-                    [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TOKEN_EXHAUSTED" || print_error "$DEVICE_TOKEN_EXHAUSTED"
-                    echo "========================================================="
-                    echo ""
-                    return 1
+                    # The poll above already delivered the token in $s; pass it
+                    # so consume_approved_token doesn't re-poll (which would see
+                    # the session as already-consumed and return no token).
+                    consume_approved_token "$session_id" "$s"
+                    return $?
                     ;;
                 rejected)
                     echo ""
@@ -872,6 +998,23 @@ install_docker() {
 
     show_system_info
     check_system_compatibility || { [ "$LANG_CODE" = "id" ] && print_error "Sistem tidak kompatibel!" || print_error "System not compatible!"; return 1; }
+
+    # Guard: Docker cannot run inside an LXC container without nesting.
+    # Detect this early and abort with clear instructions instead of letting
+    # the daemon fail to start later (cryptic error during `compose up -d`).
+    local lxc_info lxc_is lxc_nesting
+    lxc_info=$(detect_lxc)
+    IFS=':' read -r lxc_is lxc_nesting <<< "$lxc_info"
+    if [ "$lxc_is" = "true" ] && [ "$lxc_nesting" != "true" ]; then
+        echo ""
+        echo "========================================================="
+        [ "$LANG_CODE" = "id" ] && print_error "$LXC_NO_NESTING_TITLE" || print_error "$LXC_NO_NESTING_TITLE"
+        echo "========================================================="
+        [ "$LANG_CODE" = "id" ] && echo -e "$LXC_NO_NESTING_MSG" || echo -e "$LXC_NO_NESTING_MSG"
+        echo "========================================================="
+        echo ""
+        return 1
+    fi
 
     if command -v docker &> /dev/null; then
         [ "$LANG_CODE" = "id" ] && print_warning "Docker sudah terinstall!" || print_warning "Docker is already installed!"
