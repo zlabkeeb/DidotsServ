@@ -20,15 +20,16 @@ d8'   .8P 88.  .88 88 88.  .88       88 88 88    .8P 88 88.  .88 88   88   88.  
 </pre>
 </sub>
 
-**toolkit deploy ACS stack — cepat, bersih, no drama** ☕
+**toolkit deploy ACS stack — dengan approval gateway & auto-login device** ☕
 
 <br>
 
-![version](https://img.shields.io/badge/v6-brightgreen?style=flat-square&logo=github)
+![version](https://img.shields.io/badge/v9-brightgreen?style=flat-square&logo=github)
 ![platform](https://img.shields.io/badge/Ubuntu%20%7C%20Debian-4A90D9?style=flat-square&logo=linux&logoColor=white)
 ![arch](https://img.shields.io/badge/amd64%20%7C%20arm64%20%7C%20armhf-orange?style=flat-square)
 ![lang](https://img.shields.io/badge/bash-121011?style=flat-square&logo=gnu-bash&logoColor=white)
 ![docker](https://img.shields.io/badge/docker-2496ED?style=flat-square&logo=docker&logoColor=white)
+![proxmox](https://img.shields.io/badge/Proxmox%20LXC%20%7C%20KVM-orange?style=flat-square)
 
 </div>
 
@@ -59,7 +60,36 @@ bash <(curl -fsSL https://raw.githubusercontent.com/zlabkeeb/DidotsServ/main/ins
 Pilih menu (1-6):
 ```
 
-> Alur startup: **preflight check** → cek Docker (auto-install jika belum ada) → **login Docker Hub (Access Token)** → menu utama.
+> Alur startup: **preflight check** (OS, arch, internet, deps, Docker, LXC/nesting) → cek Docker (auto-install jika belum ada) → **login Docker Hub via approval gateway** → menu utama.
+
+### Approval gateway & auto-login
+
+Installer tidak langsung minta password Docker Hub. Alurnya:
+
+```
+install.sh                 Gateway (server/)          Admin (dashboard)
+     │  POST /api/request ─────► generate kode + session_id
+     │  ◄── code, session_id ──┘            │ push notif (socket.io) ──► kartu pending
+     │                                       │
+     │  ── Device ID (SHA-256) ──►           │
+     │     machine-id + product_uuid         │
+     │     + hostname                         │
+     │                                       │
+     │  ◄── auto_approved:true ── (trusted)  │  (skip approval, no admin action)
+     │     OR                                 │
+     │  ◄── auto_rejected:true ── (blocked)  │  (admin sudah block device ini)
+     │     OR                                 │
+     │  GET /api/status/:id (poll) ──►       │ ◄── POST /api/admin/approve ── klik Approve
+     │  ◄── approved + token ──              │
+     │  docker login --password-stdin        │
+     │  unset token + docker logout (trap)   │
+```
+
+- **Device ID** = `SHA-256(machine-id + product_uuid + hostname)` — unik per mesin, stabil, tidak bisa ditebak (256-bit).
+- **Auto-login** — device yang sudah di-approve sekali tidak perlu approve lagi. Saat install.sh dijalankan lagi di mesin yang sama, server kenali Device ID → auto-approved → token langsung dikirim.
+- **Device blocked** — admin bisa block device via dashboard. Saat install.sh dijalankan di mesin yang di-block, langsung auto-reject (tidak masuk antrian pending).
+- **Setiap run tetap tercatat** — session + audit log selalu dibuat, baik auto-login maupun manual.
+- **Token Docker Hub tidak pernah tampil** — dikirim via `--password-stdin`, lalu `unset`, dan `docker logout` otomatis saat installer exit.
 
 ### Submenu
 
@@ -90,7 +120,8 @@ Pilih menu (1-6):
                   GenieACS Panel
 
   [1] Install GenieACS Panel
-  [2] Uninstall GenieACS Panel
+  [2] Update GenieACS Panel
+  [3] Uninstall GenieACS Panel
   [0] Kembali
 
 ```
@@ -141,6 +172,9 @@ Pilih menu (1-6):
 - **OS** — Ubuntu 20.04 / 22.04 / 24.04 · Debian 10 / 11 / 12 · Armbian · Raspberry Pi OS
 - **Arch** — `amd64` · `arm64` · `armhf`
 - **Mode** — Native Linux, WSL2
+- **Proxmox** — VE host (bare-metal), KVM VM, LXC container (butuh **Nesting** enabled)
+  - LXC tanpa nesting dideteksi di preflight → installer abort dengan instruksi `pct set <CTID> -features nesting=1`
+  - LXC dengan nesting OK → lanjut normal
 
 ---
 
@@ -148,8 +182,8 @@ Pilih menu (1-6):
 
 ```
 DidotsServ/
-├── install.sh               ← entry point
-├── db/                      ← seed data ACS (BSON)
+├── install.sh               ← installer (device-flow + auto-login, v9)
+├── db/                      ← seed data ACS (BSON, di-download dari GitHub Raw)
 │   ├── cache.bson
 │   ├── config.bson
 │   ├── permissions.bson
@@ -158,8 +192,32 @@ DidotsServ/
 │   ├── users.bson
 │   ├── virtualParameters.bson
 │   └── *.metadata.json
+├── server/                  ← approval gateway (Node.js + Express + SQLite)
+│   ├── package.json
+│   ├── ecosystem.config.cjs  ← PM2 config
+│   ├── .env.example          ← template konfigurasi
+│   ├── src/                  ← backend (10 modul)
+│   │   ├── index.js          ← Express + socket.io + helmet
+│   │   ├── config.js         ← env + validasi
+│   │   ├── db.js             ← node:sqlite (zero native deps)
+│   │   ├── store.js          ← sessions + device auto-login + token rotation
+│   │   ├── audit.js          ← audit log persisten
+│   │   ├── auth.js           ← admin bcrypt + anti-lockout
+│   │   ├── middleware.js     ← requireAdmin + IP guard + anti-CSRF
+│   │   ├── ratelimit.js      ← rate limit per IP
+│   │   ├── routes-client.js  ← /api/health, /request, /status/:id
+│   │   └── routes-admin.js    ← login, approve, tokens, devices, admins, audit
+│   ├── data/                 ← SQLite (auto-created, jangan commit)
+│   │   └── gateway.db
+│   └── public/              ← dashboard admin (SPA)
+│       ├── index.html
+│       ├── app.js
+│       ├── style.css
+│       └── favicon.svg
 └── README.md
 ```
+
+> **install.sh ada di root** (luar folder `server/`). Installer ini independen — bisa jalan di mesin mana pun, asalkan bisa reach approval gateway. Folder `server/` deploy terpisah di server yang hosting dashboard approval.
 
 ---
 
@@ -197,6 +255,49 @@ access code :
 </table>
 
 > ⚠️ Ganti password setelah login pertama, jangan sampe lupa.
+
+---
+
+## 🔒 Keamanan
+
+**Approval gateway:**
+- HTTPS wajib + HSTS + force redirect (reverse proxy dengan SSL).
+- Cookie admin: `httpOnly`, `sameSite=strict`, `secure=auto`.
+- Admin POST diproteksi CSRF: wajib header `X-Requested-With: fetch` + cookie same-origin.
+- Rate limit: `/api/request` 5/menit/IP, `status` 40/menit/IP, login 5/menit/IP.
+- `session_id` = 256-bit random; `code` = 8 char Crockford base32.
+
+**Device ID & auto-login:**
+- Device ID = `SHA-256(machine-id + product_uuid + hostname)` — 256-bit, tidak bisa ditebak.
+- `product_uuid` butuh **root** untuk dibaca (`/sys/class/dmi/id/product_uuid`) — spoof butuh akses fisik ke mesin target.
+- Device ID **tidak pernah tampil penuh** di dashboard — masked `••••` + 6 char terakhir (sama seperti masking token).
+- Admin bisa **block/hapus device** kapan saja → device blocked auto-reject (tidak masuk antrian pending).
+
+**Token Docker Hub:**
+- Token tidak pernah di-echo ke terminal — dikirim via `--password-stdin`, lalu `unset`.
+- `cleanup_logout` (trap EXIT) menjalankan `docker logout` saat installer keluar → token tidak tertinggal.
+- Token di server: hanya ada di `tokens` table (admin-managed) + transient di memory selama 60s delivery window, lalu di-purge. **Tidak pernah tersimpan di sessions/audit/devices table.**
+- Token di-dashboard hanya tampil `••••` + 4 char terakhir — admin tidak bisa baca token lewat UI.
+- Multi-token pool: saat satu token gagal, installer otomatis minta token berikutnya.
+
+**Audit log:** setiap event tercatat permanen di SQLite — request_created, login_ok/failed, approved, rejected, auto_login, device_blocked_request, token_delivered, csrf_blocked, dll.
+
+---
+
+## 🖥️ Dashboard admin
+
+Dashboard (SPA) tersedia di root gateway. Login pakai admin credentials, lalu:
+
+| Tab | Fungsi |
+|-----|--------|
+| **Dashboard** | Statistik (pending/approved/rejected/tokens/devices) + kartu permintaan pending dengan tombol Approve/Reject |
+| **Token Pool** | Kelola Docker Hub tokens (tambah/aktifkan/hapus) — token masked |
+| **Devices** | Daftar device terdaftar (trusted/blocked) — Device ID masked, tombol Block/Hapus |
+| **History** | Riwayat semua request + search (kode/IP/hostname/OS) |
+| **Audit Log** | Log event lengkap (waktu, event, detail) |
+| **Admins** | Kelola akun admin (tambah/ganti password/hapus) — anti-lockout |
+
+Real-time via socket.io — kartu pending muncul instan saat ada request baru, dengan sound notification.
 
 ---
 
