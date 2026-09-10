@@ -47,7 +47,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/zlabkeeb/DidotsServ/main/ins
 ## 🖥️ Preview menu
 
 ```
-  Interactive Installer v6
+  Interactive Installer v9
 
   [1] Docker
   [2] GenieACS
