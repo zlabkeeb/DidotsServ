@@ -254,53 +254,6 @@ access code :
 </tr>
 </table>
 
-> ⚠️ Ganti password setelah login pertama, jangan sampe lupa.
-
----
-
-## 🔒 Keamanan
-
-**Approval gateway:**
-- HTTPS wajib + HSTS + force redirect (reverse proxy dengan SSL).
-- Cookie admin: `httpOnly`, `sameSite=strict`, `secure=auto`.
-- Admin POST diproteksi CSRF: wajib header `X-Requested-With: fetch` + cookie same-origin.
-- Rate limit: `/api/request` 5/menit/IP, `status` 40/menit/IP, login 5/menit/IP.
-- `session_id` = 256-bit random; `code` = 8 char Crockford base32.
-
-**Device ID & auto-login:**
-- Device ID = `SHA-256(machine-id + product_uuid + hostname)` — 256-bit, tidak bisa ditebak.
-- `product_uuid` butuh **root** untuk dibaca (`/sys/class/dmi/id/product_uuid`) — spoof butuh akses fisik ke mesin target.
-- Device ID **tidak pernah tampil penuh** di dashboard — masked `••••` + 6 char terakhir (sama seperti masking token).
-- Admin bisa **block/hapus device** kapan saja → device blocked auto-reject (tidak masuk antrian pending).
-
-**Token Docker Hub:**
-- Token tidak pernah di-echo ke terminal — dikirim via `--password-stdin`, lalu `unset`.
-- `cleanup_logout` (trap EXIT) menjalankan `docker logout` saat installer keluar → token tidak tertinggal.
-- Token di server: hanya ada di `tokens` table (admin-managed) + transient di memory selama 60s delivery window, lalu di-purge. **Tidak pernah tersimpan di sessions/audit/devices table.**
-- Token di-dashboard hanya tampil `••••` + 4 char terakhir — admin tidak bisa baca token lewat UI.
-- Multi-token pool: saat satu token gagal, installer otomatis minta token berikutnya.
-
-**Audit log:** setiap event tercatat permanen di SQLite — request_created, login_ok/failed, approved, rejected, auto_login, device_blocked_request, token_delivered, csrf_blocked, dll.
-
----
-
-## 🖥️ Dashboard admin
-
-Dashboard (SPA) tersedia di root gateway. Login pakai admin credentials, lalu:
-
-| Tab | Fungsi |
-|-----|--------|
-| **Dashboard** | Statistik (pending/approved/rejected/tokens/devices) + kartu permintaan pending dengan tombol Approve/Reject |
-| **Token Pool** | Kelola Docker Hub tokens (tambah/aktifkan/hapus) — token masked |
-| **Devices** | Daftar device terdaftar (trusted/blocked) — Device ID masked, tombol Block/Hapus |
-| **History** | Riwayat semua request + search (kode/IP/hostname/OS) |
-| **Audit Log** | Log event lengkap (waktu, event, detail) |
-| **Admins** | Kelola akun admin (tambah/ganti password/hapus) — anti-lockout |
-
-Real-time via socket.io — kartu pending muncul instan saat ada request baru, dengan sound notification.
-
----
-
 <div align="center">
 <sub>· solusidigitalnet · 2026</sub>
 </div>
