@@ -60,13 +60,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/zlabkeeb/DidotsServ/main/ins
 Pilih menu (1-6):
 ```
 
-> Alur startup: **preflight check** (OS, arch, internet, deps, Docker) → cek Docker (auto-install jika belum ada) → **login Docker Hub otomatis** → menu utama.
-
-### Login Docker Hub
-
-Installer handle login Docker Hub otomatis. Saat install.sh jalan, tunggu sebentar — installer akan lanjut sendiri ke menu utama.
-
-> Device yang sudah pernah install → install berikutnya di mesin yang sama langsung lanjut tanpa tunggu.
+> Alur startup: **preflight check** (OS, arch, internet, deps, Docker) → cek Docker (auto-install jika belum ada) → menu utama.
 
 ### Submenu
 
