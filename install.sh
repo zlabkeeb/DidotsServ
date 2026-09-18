@@ -109,6 +109,11 @@ Setelah itu jalankan installer lagi."
         SUBMENU_UNINSTALL_PANEL="Uninstall GenieACS Panel"
         SUBMENU_INSTALL_CUSTOMER_PORTAL="Install Customer Portal"
         SUBMENU_UNINSTALL_CUSTOMER_PORTAL="Uninstall Customer Portal"
+
+        MENU_CUSTOMER_PORTAL_OTP="Customer Portal OTP"
+        SUBMENU_INSTALL_CUSTOMER_PORTAL_OTP="Install Customer Portal OTP WhatsApp"
+        SUBMENU_UPDATE_CUSTOMER_PORTAL_OTP="Update Customer Portal OTP WhatsApp"
+        SUBMENU_UNINSTALL_CUSTOMER_PORTAL_OTP="Uninstall Customer Portal OTP WhatsApp"
         ;;
     *)
         MSG_TITLE="Interactive Installer"
@@ -188,6 +193,11 @@ After that, run the installer again."
         SUBMENU_UNINSTALL_PANEL="Uninstall GenieACS Panel"
         SUBMENU_INSTALL_CUSTOMER_PORTAL="Install Customer Portal"
         SUBMENU_UNINSTALL_CUSTOMER_PORTAL="Uninstall Customer Portal"
+
+        MENU_CUSTOMER_PORTAL_OTP="Customer Portal OTP"
+        SUBMENU_INSTALL_CUSTOMER_PORTAL_OTP="Install Customer Portal OTP WhatsApp"
+        SUBMENU_UPDATE_CUSTOMER_PORTAL_OTP="Update Customer Portal OTP WhatsApp"
+        SUBMENU_UNINSTALL_CUSTOMER_PORTAL_OTP="Uninstall Customer Portal OTP WhatsApp"
         ;;
 esac
 
@@ -2033,6 +2043,270 @@ uninstall_customer_portal() {
 }
 
 # ============================================================
+# INSTALL CUSTOMER PORTAL (OTP WhatsApp)
+# Image: solusidigitalnet/genieacspanelapi:customerportal
+# Login pelanggan via OTP WhatsApp, port 1999
+# ============================================================
+install_customer_portal_otp() {
+    show_installation_header
+    [ "$LANG_CODE" = "id" ] && animated_text "🚀 Memulai instalasi Customer Portal OTP WhatsApp..." 0.05 || animated_text "🚀 Starting Customer Portal OTP WhatsApp installation..." 0.05
+
+    if ! command -v docker &> /dev/null; then
+        [ "$LANG_CODE" = "id" ] && print_error "Docker belum terinstall! Silakan install Docker terlebih dahulu" || print_error "Docker is not installed! Please install Docker first"
+        return 1
+    fi
+
+    configure_firewall "1999/tcp"
+
+    ARCH=$(detect_architecture)
+    [ "$LANG_CODE" = "id" ] && print_info "Arsitektur terdeteksi: $ARCH" || print_info "Detected architecture: $ARCH"
+    [ "$ARCH" = "unknown" ] && { [ "$LANG_CODE" = "id" ] && print_error "Arsitektur tidak didukung: $(uname -m)" || print_error "Unsupported architecture: $(uname -m)"; return 1; }
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📁 Menyiapkan direktori Customer Portal OTP" || loading_animation "📁 Preparing Customer Portal OTP directory"
+    cd /root || return 1
+    local IS_REINSTALL=false
+
+    if [ -d "customerportal-otp" ]; then
+        # Folder sudah ada — pertahankan database, hanya update konfigurasi.
+        IS_REINSTALL=true
+        if [ "$LANG_CODE" = "id" ]; then
+            print_info "Direktori customerportal-otp sudah ada — database dipertahankan"
+        else
+            print_info "customerportal-otp directory already exists — database preserved"
+        fi
+        [ "$LANG_CODE" = "id" ] && loading_animation "🗑️  Menghentikan container lama" || loading_animation "🗑️  Stopping existing container"
+        docker stop customerportal-otp 2>/dev/null; docker rm customerportal-otp 2>/dev/null
+        cd customerportal-otp || return 1
+        # Pertahankan JWT_SECRET agar sesi aktif saat update tetap berlaku
+        EXISTING_JWT=$(grep -E 'JWT_SECRET=' docker-compose.yml 2>/dev/null | head -1 | sed -E 's/.*JWT_SECRET=([^[:space:]]*).*/\1/')
+        if [ -n "$EXISTING_JWT" ]; then
+            JWT_SECRET="$EXISTING_JWT"
+        else
+            JWT_SECRET=$(openssl rand -hex 32)
+        fi
+    else
+        mkdir -p customerportal-otp && cd customerportal-otp || return 1
+        JWT_SECRET=$(openssl rand -hex 32)
+    fi
+
+    MEMORY_LIMIT=$(choose_memory_limit "Customer Portal OTP")
+    [ "$MEMORY_LIMIT" = "unlimited" ] \
+        && { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: Unlimited" || print_info "Memory limit: Unlimited"; } \
+        || { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: ${MEMORY_LIMIT}M" || print_info "Memory limit: ${MEMORY_LIMIT}M"; }
+
+    IMAGE="solusidigitalnet/genieacspanelapi:customerportal"
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📝 Membuat konfigurasi Docker Compose" || loading_animation "📝 Creating Docker Compose configuration"
+
+    if [ "$MEMORY_LIMIT" = "unlimited" ]; then
+        DEPLOY_BLOCK=""
+    else
+        DEPLOY_BLOCK="    deploy:
+      resources:
+        limits:
+          memory: ${MEMORY_LIMIT}M"
+    fi
+
+    mkdir -p data .wa_session public/img
+
+    cat > docker-compose.yml <<EOF
+services:
+  customerportal-otp:
+    image: ${IMAGE}
+    container_name: customerportal-otp
+${DEPLOY_BLOCK}
+    ports:
+      - "1999:1999"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - NODE_ENV=production
+      - PORT=1999
+      - JWT_SECRET=${JWT_SECRET}
+    volumes:
+      - ./data:/app/data
+      - ./.wa_session:/app/.wa_session
+      - ./public/img:/app/public/img
+    restart: unless-stopped
+EOF
+
+    echo ""; echo "========================================================="; [ "$LANG_CODE" = "id" ] && animated_text "🐳 Memulai Docker Compose..." 0.08 || animated_text "🐳 Starting Docker Compose..." 0.08; echo "========================================================="; echo ""
+
+    if compose_run up -d; then COMPOSE_SUCCESS=true; else COMPOSE_SUCCESS=false; fi
+
+    echo ""; echo "========================================================="
+    if [ "$COMPOSE_SUCCESS" = true ]; then
+        [ "$LANG_CODE" = "id" ] && print_success "🎉 Docker Compose berhasil dijalankan!" || print_success "🎉 Docker Compose started successfully!"
+    else
+        [ "$LANG_CODE" = "id" ] && print_error "❌ Gagal menjalankan Docker Compose" || print_error "❌ Failed to start Docker Compose"
+        return 1
+    fi
+    echo "========================================================="; echo ""
+
+    [ "$LANG_CODE" = "id" ] && show_progress_bar 25 "⏳ Menunggu container siap..." || show_progress_bar 25 "⏳ Waiting for container to be ready..."
+
+    if docker ps | grep -q customerportal-otp; then
+        [ "$LANG_CODE" = "id" ] && print_success "✅ Customer Portal OTP berhasil diinstall dan berjalan!" || print_success "✅ Customer Portal OTP installed and running successfully!"
+        SERVER_IP=$(get_server_ip)
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════╗"
+        [ "$LANG_CODE" = "id" ] && echo "║                    INSTALASI SELESAI!                   ║" || echo "║                  INSTALLATION COMPLETE!                 ║"
+        echo "╠══════════════════════════════════════════════════════════╣"
+        echo "║  🌐 URL Admin  : http://${SERVER_IP}:1999/admin"
+        echo "║  🌐 URL Portal : http://${SERVER_IP}:1999"
+        echo "║  👤 Admin      : admin / admin (default)"
+        echo "║  📱 WhatsApp   : scan QR di /admin setelah login"
+        echo "╚══════════════════════════════════════════════════════════╝"
+        [ "$LANG_CODE" = "id" ] && print_warning "Ganti password admin setelah login pertama (Panel Admin → Akun Admin)!" || print_warning "Change the admin password after first login (Admin Panel → Account Admin)!"
+        return 0
+    else
+        [ "$LANG_CODE" = "id" ] && print_error "❌ Container gagal berjalan" || print_error "❌ Container failed to start"
+        docker ps -a; docker logs customerportal-otp
+        return 1
+    fi
+}
+
+# ============================================================
+# UPDATE CUSTOMER PORTAL (OTP WhatsApp)
+# Re-pull image + rewrite compose config, keep the database.
+# ============================================================
+update_customer_portal_otp() {
+    show_installation_header
+    [ "$LANG_CODE" = "id" ] && animated_text "🔄 Memulai update Customer Portal OTP..." 0.05 || animated_text "🔄 Starting Customer Portal OTP update..." 0.05
+
+    if [ ! -d /root/customerportal-otp ]; then
+        [ "$LANG_CODE" = "id" ] && print_error "Customer Portal OTP belum terinstall. Jalankan menu Install terlebih dahulu." || print_error "Customer Portal OTP is not installed yet. Run Install first."
+        return 1
+    fi
+    if ! command -v docker &> /dev/null; then
+        [ "$LANG_CODE" = "id" ] && print_error "Docker belum terinstall!" || print_error "Docker is not installed!"
+        return 1
+    fi
+
+    configure_firewall "1999/tcp"
+
+    cd /root/customerportal-otp || return 1
+
+    EXISTING_JWT=$(grep -E 'JWT_SECRET=' docker-compose.yml 2>/dev/null | head -1 | sed -E 's/.*JWT_SECRET=([^[:space:]]*).*/\1/')
+    if [ -n "$EXISTING_JWT" ]; then
+        JWT_SECRET="$EXISTING_JWT"
+    else
+        JWT_SECRET=$(openssl rand -hex 32)
+    fi
+
+    MEMORY_LIMIT=$(choose_memory_limit "Customer Portal OTP")
+    [ "$MEMORY_LIMIT" = "unlimited" ] \
+        && { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: Unlimited" || print_info "Memory limit: Unlimited"; } \
+        || { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: ${MEMORY_LIMIT}M" || print_info "Memory limit: ${MEMORY_LIMIT}M"; }
+
+    IMAGE="solusidigitalnet/genieacspanelapi:customerportal"
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🛑 Menghentikan dan menghapus container lama" || loading_animation "🛑 Stopping and removing old container"
+    docker stop customerportal-otp 2>/dev/null; docker rm customerportal-otp 2>/dev/null
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🐳 Menghapus image lama (force pull baru)" || loading_animation "🐳 Removing old image (force fresh pull)"
+    docker rmi "$IMAGE" 2>&1 | grep -v "No such image" || true
+
+    if [ "$MEMORY_LIMIT" = "unlimited" ]; then
+        DEPLOY_BLOCK=""
+    else
+        DEPLOY_BLOCK="    deploy:
+      resources:
+        limits:
+          memory: ${MEMORY_LIMIT}M"
+    fi
+
+    mkdir -p data .wa_session public/img
+
+    cat > docker-compose.yml <<EOF
+services:
+  customerportal-otp:
+    image: ${IMAGE}
+    container_name: customerportal-otp
+${DEPLOY_BLOCK}
+    ports:
+      - "1999:1999"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - NODE_ENV=production
+      - PORT=1999
+      - JWT_SECRET=${JWT_SECRET}
+    volumes:
+      - ./data:/app/data
+      - ./.wa_session:/app/.wa_session
+      - ./public/img:/app/public/img
+    restart: unless-stopped
+EOF
+
+    echo ""; echo "========================================================="; [ "$LANG_CODE" = "id" ] && animated_text "🐳 Memulai Docker Compose (pull image baru)..." 0.08 || animated_text "🐳 Starting Docker Compose (pulling new image)..." 0.08; echo "========================================================="; echo ""
+
+    if compose_run up -d; then COMPOSE_SUCCESS=true; else COMPOSE_SUCCESS=false; fi
+
+    echo ""; echo "========================================================="
+    if [ "$COMPOSE_SUCCESS" = true ]; then
+        [ "$LANG_CODE" = "id" ] && print_success "🎉 Customer Portal OTP berhasil diperbarui!" || print_success "🎉 Customer Portal OTP updated successfully!"
+    else
+        [ "$LANG_CODE" = "id" ] && print_error "❌ Gagal menjalankan Docker Compose" || print_error "❌ Failed to start Docker Compose"
+        return 1
+    fi
+    echo "========================================================="; echo ""
+
+    [ "$LANG_CODE" = "id" ] && show_progress_bar 25 "⏳ Menunggu container siap..." || show_progress_bar 25 "⏳ Waiting for container to be ready..."
+
+    if docker ps | grep -q customerportal-otp; then
+        [ "$LANG_CODE" = "id" ] && print_success "✅ Customer Portal OTP berhasil diperbarui dan berjalan!" || print_success "✅ Customer Portal OTP updated and running!"
+        [ "$LANG_CODE" = "id" ] && print_info "Portal tetap dapat diakses seperti sebelumnya (URL & login tidak berubah)." || print_info "Portal remains accessible as before (URL & login unchanged)."
+        return 0
+    else
+        [ "$LANG_CODE" = "id" ] && print_error "❌ Container gagal berjalan" || print_error "❌ Container failed to start"
+        docker ps -a; docker logs customerportal-otp
+        return 1
+    fi
+}
+
+# ============================================================
+# UNINSTALL CUSTOMER PORTAL (OTP WhatsApp)
+# ============================================================
+uninstall_customer_portal_otp() {
+    show_installation_header
+    [ "$LANG_CODE" = "id" ] && animated_text "⚠️  PERINGATAN: Ini akan menghapus Customer Portal OTP!" 0.05 || animated_text "⚠️  WARNING: This will remove Customer Portal OTP!" 0.05
+    [ "$LANG_CODE" = "id" ] && read -p "Apakah Anda yakin? (y/n): " confirm || read -p "Are you sure? (y/n): " confirm
+    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { [ "$LANG_CODE" = "id" ] && print_info "Uninstall dibatalkan" || print_info "Uninstall cancelled"; return 1; }
+
+    echo ""; echo "========================================================="; [ "$LANG_CODE" = "id" ] && animated_text "🗑️  Memulai proses uninstall Customer Portal OTP..." 0.08 || animated_text "🗑️  Starting Customer Portal OTP uninstall process..." 0.08; echo "========================================================="; echo ""
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🛑 Menghentikan dan menghapus container" || loading_animation "🛑 Stopping and removing container"
+    docker stop customerportal-otp 2>/dev/null; docker rm customerportal-otp 2>/dev/null
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🐳 Menghapus Docker image" || loading_animation "🐳 Removing Docker image"
+    docker rmi solusidigitalnet/genieacspanelapi:customerportal 2>&1 | grep -v "No such image" || true
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "📁 Menghapus direktori & database Customer Portal OTP" || loading_animation "📁 Removing Customer Portal OTP folder & database"
+    rm -rf /root/customerportal-otp
+
+    if [ "$(check_ufw_status)" = "active" ]; then
+        echo ""
+        [ "$LANG_CODE" = "id" ] && read -p "Hapus rules firewall Customer Portal OTP? (y/n): " remove_fw || read -p "Remove Customer Portal OTP firewall rules? (y/n): " remove_fw
+        if [ "$remove_fw" = "y" ] || [ "$remove_fw" = "Y" ]; then
+            [ "$LANG_CODE" = "id" ] && loading_animation "🔥 Menghapus rules firewall" || loading_animation "🔥 Removing firewall rules"
+            ufw delete allow 1999/tcp 2>/dev/null; ufw reload &> /dev/null
+            [ "$LANG_CODE" = "id" ] && print_success "✅ Rules firewall berhasil dihapus" || print_success "✅ Firewall rules removed successfully"
+        fi
+    fi
+
+    [ "$LANG_CODE" = "id" ] && loading_animation "🧹 Membersihkan sistem" || loading_animation "🧹 Cleaning up system"
+    command -v docker &> /dev/null && docker system prune -f
+
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════╗"
+    [ "$LANG_CODE" = "id" ] && echo "║                    UNINSTALL SELESAI!                   ║" || echo "║                  UNINSTALL COMPLETE!                    ║"
+    [ "$LANG_CODE" = "id" ] && echo "║      Customer Portal OTP berhasil dihapus! ✅            ║" || echo "║    Customer Portal OTP successfully removed! ✅          ║"
+    echo "╚══════════════════════════════════════════════════════════╝"
+    return 0
+}
+
+# ============================================================
 # SHOW STATUS
 # ============================================================
 show_status() {
@@ -2084,6 +2358,17 @@ show_status() {
             [ "$LANG_CODE" = "id" ] && echo "  🔌 Port: 1998" || echo "  🔌 Port: 1998"
         else
             [ "$LANG_CODE" = "id" ] && print_warning "⚠️  Customer Portal: Tidak Berjalan" || print_warning "⚠️  Customer Portal: Not Running"
+        fi
+
+        echo ""
+
+        if docker inspect customerportal-otp >/dev/null 2>&1 && [ "$(docker inspect -f '{{.State.Running}}' customerportal-otp 2>/dev/null)" = "true" ]; then
+            [ "$LANG_CODE" = "id" ] && print_success "✅ Customer Portal OTP: Berjalan" || print_success "✅ Customer Portal OTP: Running"
+            echo "  🌐 URL Admin: http://${SERVER_IP}:1999/admin"
+            echo "  🌐 URL Portal: http://${SERVER_IP}:1999"
+            [ "$LANG_CODE" = "id" ] && echo "  🔌 Port: 1999" || echo "  🔌 Port: 1999"
+        else
+            [ "$LANG_CODE" = "id" ] && print_warning "⚠️  Customer Portal OTP: Tidak Berjalan" || print_warning "⚠️  Customer Portal OTP: Not Running"
         fi
 
         RUNNING_CONTAINERS=$(docker ps -q 2>/dev/null | wc -l)
@@ -2148,8 +2433,9 @@ show_menu() {
     echo "  [2] $MENU_GENIEACS"
     echo "  [3] $MENU_PANEL"
     echo "  [4] $MENU_CUSTOMER_PORTAL"
-    echo "  [5] $MENU_STATUS"
-    echo "  [6] $MENU_EXIT"
+    echo "  [5] $MENU_CUSTOMER_PORTAL_OTP"
+    echo "  [6] $MENU_STATUS"
+    echo "  [7] $MENU_EXIT"
     echo ""
     echo "========================================================="
 }
@@ -2227,6 +2513,25 @@ customer_portal_menu() {
     done
 }
 
+show_customer_portal_otp_menu() {
+    clear; echo ""; echo "========================================================="; echo "                  $MENU_CUSTOMER_PORTAL_OTP"; echo "========================================================="; echo ""
+    echo "  [1] $SUBMENU_INSTALL_CUSTOMER_PORTAL_OTP"; echo "  [2] $SUBMENU_UPDATE_CUSTOMER_PORTAL_OTP"; echo "  [3] $SUBMENU_UNINSTALL_CUSTOMER_PORTAL_OTP"; echo "  [0] $MSG_BACK"; echo ""; echo "========================================================="
+}
+
+customer_portal_otp_menu() {
+    while true; do
+        show_customer_portal_otp_menu
+        read -p "$MSG_CHOOSE (0-3): " choice
+        case $choice in
+            1) install_customer_portal_otp && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            2) update_customer_portal_otp && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            3) uninstall_customer_portal_otp && print_success "$MSG_PROCESS_COMPLETE" || print_error "$MSG_PROCESS_FAILED"; read -p "$MSG_PRESS_ENTER";;
+            0) return;;
+            *) print_error "$MSG_INVALID_CHOICE"; read -p "$MSG_PRESS_ENTER";;
+        esac
+    done
+}
+
 main() {
     # Ensure cleanup runs on exit; Ctrl+C / termination exit immediately
     trap 'exit 0' INT TERM
@@ -2260,14 +2565,15 @@ main() {
     # 4. Main installer menu
     while true; do
         show_menu
-        read -p "$MSG_CHOOSE (1-6): " choice
+        read -p "$MSG_CHOOSE (1-7): " choice
         case $choice in
             1) docker_menu;;
             2) genieacs_menu;;
             3) panel_menu;;
             4) customer_portal_menu;;
-            5) show_status; read -p "$MSG_PRESS_ENTER";;
-            6) print_info "$MSG_THANK_YOU"; print_info "$EXIT_MESSAGE"; exit 0;;
+            5) customer_portal_otp_menu;;
+            6) show_status; read -p "$MSG_PRESS_ENTER";;
+            7) print_info "$MSG_THANK_YOU"; print_info "$EXIT_MESSAGE"; exit 0;;
             *) print_error "$MSG_INVALID_CHOICE"; read -p "$MSG_PRESS_ENTER";;
         esac
     done
