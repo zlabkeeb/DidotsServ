@@ -2107,7 +2107,10 @@ install_customer_portal_otp() {
           memory: ${MEMORY_LIMIT}M"
     fi
 
+    # PENTING: container jalan sebagai nodeuser (UID 1001).
+    # Folder harus 1001:1001, kalau tidak SQLite gagal (SQLITE_CANTOPEN).
     mkdir -p data .wa_session public/img
+    chown -R 1001:1001 data .wa_session public/img
 
     cat > docker-compose.yml <<EOF
 services:
@@ -2216,7 +2219,10 @@ update_customer_portal_otp() {
           memory: ${MEMORY_LIMIT}M"
     fi
 
+    # PENTING: container jalan sebagai nodeuser (UID 1001).
+    # Folder harus 1001:1001, kalau tidak SQLite gagal (SQLITE_CANTOPEN).
     mkdir -p data .wa_session public/img
+    chown -R 1001:1001 data .wa_session public/img
 
     cat > docker-compose.yml <<EOF
 services:
