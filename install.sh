@@ -83,6 +83,7 @@ case $LANG_CODE in
         DEVICE_TOKEN_EXHAUSTED="Semua token habis/gagal. Hubungi admin."
         DEVICE_AUTO_RECOGNIZED="Device dikenali — auto-login, melewati approval"
         DEVICE_HEALTH_FAIL="Tidak dapat menghubungi server approval"
+        DEVICE_RATE_LIMITED="Server approval terlalu banyak permintaan dari IP ini. Tunggu 1 menit lalu ulangi."
         LXC_NO_NESTING_TITLE="DOCKER TIDAK BISA JALAN DI LXC TANPA NESTING"
         LXC_NO_NESTING_MSG="Container LXC terdeteksi tapi fitur Nesting belum aktif.
 Docker daemon tidak akan bisa start, dan GenieACS akan gagal.
@@ -167,6 +168,7 @@ Setelah itu jalankan installer lagi."
         DEVICE_TOKEN_EXHAUSTED="All tokens exhausted/failed. Contact admin."
         DEVICE_AUTO_RECOGNIZED="Device recognized — auto-login, skipping approval"
         DEVICE_HEALTH_FAIL="Cannot reach approval server"
+        DEVICE_RATE_LIMITED="Approval server is rate limiting this IP. Wait 1 minute and retry."
         LXC_NO_NESTING_TITLE="DOCKER CANNOT RUN IN LXC WITHOUT NESTING"
         LXC_NO_NESTING_MSG="An LXC container was detected but the Nesting feature is not enabled.
 The Docker daemon will fail to start, and GenieACS will fail.
@@ -667,19 +669,51 @@ json_get() {
 }
 
 # Call a JSON API endpoint. $1=method, $2=path, $3=body(POST). Prints body.
+#
+# On success (2xx) returns 0 and the body on stdout, and sets API_LAST_CODE.
+# On failure returns 1 and sets API_LAST_CODE to the HTTP status (or 000 when
+# the server could not be reached at all), so callers can tell "server offline"
+# (000) from "rate limited" (429) from a real error instead of guessing.
+#
+# Retry policy matters here:
+#   GET  -> retried twice; a status poll is idempotent, so a retry is harmless.
+#   POST -> NEVER retried. POST /api/request is not idempotent: if the server
+#           already created the session and only the response was lost/slow,
+#           curl --retry would create a SECOND session with a different code.
+#           That is how one installer run ends up showing two cards in the
+#           dashboard. Better to fail loudly and let the user re-run.
+API_LAST_CODE=000
 api_call() {
     local method="$1"
     local path="$2"
     local body="${3:-}"
     local url="${INSTALL_SERVER_URL}${path}"
+    local out code
     if [ "$method" = "GET" ]; then
-        curl --fail --silent --show-error --max-time 10 --retry 2 \
-             -H 'Accept: application/json' "$url"
+        out=$(curl --silent --show-error --max-time 10 --retry 2 \
+             -H 'Accept: application/json' -w $'\n%{http_code}' "$url" 2>/dev/null)
     else
-        curl --fail --silent --show-error --max-time 10 --retry 2 \
+        out=$(curl --silent --show-error --max-time 10 \
              -X POST -H 'Content-Type: application/json' -H 'Accept: application/json' \
-             --data "$body" "$url"
+             --data "$body" -w $'\n%{http_code}' "$url" 2>/dev/null)
     fi
+    code=$(printf '%s' "$out" | tail -n1)
+    case "$code" in
+        2??) API_LAST_CODE="$code"; printf '%s' "$out" | sed '$d'; return 0 ;;
+        000|"") API_LAST_CODE=000; return 1 ;;
+        *)   API_LAST_CODE="$code"; printf '%s' "$out" | sed '$d'; return 1 ;;
+    esac
+}
+
+# Explain a failed API call instead of always saying "server offline".
+api_error() {
+    if [ "$API_LAST_CODE" = "429" ]; then
+        [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_RATE_LIMITED" || print_error "$DEVICE_RATE_LIMITED"
+    else
+        [ "$LANG_CODE" = "id" ] && print_error "$1" || print_error "$1"
+    fi
+    echo "========================================================="
+    echo ""
 }
 
 # Lightweight liveness probe. Returns 0 if the approval server responds.
@@ -728,6 +762,7 @@ consume_approved_token() {
     local s="${2:-}"
     local token docker_user tries=0 fr fstatus
     local max_token_tries=10
+    local login_out fail_reason
 
     # If a status JSON was passed in (manual approval path already polled and
     # received the token), use it; otherwise fetch it now (auto-login path).
@@ -736,9 +771,7 @@ consume_approved_token() {
     # pre-fetched payload.
     if [ -z "$s" ]; then
         s=$(api_call GET "/api/status/$session_id") || {
-            [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TOKEN_FAIL" || print_error "$DEVICE_TOKEN_FAIL"
-            echo "========================================================="
-            echo ""
+            api_error "$DEVICE_TOKEN_FAIL"
             return 1
         }
     fi
@@ -747,18 +780,27 @@ consume_approved_token() {
 
     while [ -n "$token" ] && [ -n "$docker_user" ] && [ "$tries" -lt "$max_token_tries" ]; do
         # Pipe token via stdin so it is never printed or visible in the process list.
-        if printf '%s' "$token" | docker login -u "$docker_user" --password-stdin >/dev/null 2>&1; then
+        # stderr is captured (never echoed) purely to tell an auth rejection apart
+        # from a network hiccup: the server needs that to know whether the token
+        # is really bad or should simply be retried.
+        login_out=$(printf '%s' "$token" | docker login -u "$docker_user" --password-stdin 2>&1 >/dev/null)
+        if [ $? -eq 0 ]; then
             DOCKER_HUB_LOGGED_IN=true
-            unset token docker_user fr s
+            unset token docker_user fr s login_out
             [ "$LANG_CODE" = "id" ] && print_success "$DEVICE_TOKEN_OK" || print_success "$DEVICE_TOKEN_OK"
             echo "========================================================="
             echo ""
             return 0
         fi
-        unset token
+        case "$login_out" in
+            *[Uu]nauthorized*|*"incorrect username or password"*|*[Dd]enied*|*"authentication required"*)
+                fail_reason="auth" ;;
+            *) fail_reason="network" ;;
+        esac
+        unset token login_out
         tries=$((tries + 1))
         [ "$tries" -lt "$max_token_tries" ] && { [ "$LANG_CODE" = "id" ] && print_warning "$DEVICE_TOKEN_RETRY" || print_warning "$DEVICE_TOKEN_RETRY"; }
-        if fr=$(api_call POST "/api/status/$session_id/fail" "{}"); then
+        if fr=$(api_call POST "/api/status/$session_id/fail" "{\"reason\":\"$fail_reason\"}"); then
             fstatus=$(json_get "$fr" status)
             case "$fstatus" in
                 approved)
@@ -781,9 +823,7 @@ consume_approved_token() {
                     ;;
             esac
         else
-            [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_TOKEN_FAIL" || print_error "$DEVICE_TOKEN_FAIL"
-            echo "========================================================="
-            echo ""
+            api_error "$DEVICE_TOKEN_FAIL"
             return 1
         fi
     done
@@ -834,9 +874,20 @@ dockerhub_login() {
     [ "$LANG_CODE" = "id" ] && print_info "Mengirim permintaan ke server..." || print_info "Sending request to server..."
     local resp
     if ! resp=$(api_call POST "/api/request" "$body"); then
-        [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_HEALTH_FAIL" || print_error "$DEVICE_HEALTH_FAIL"
-        echo "========================================================="
-        echo ""
+        # Distinguish rate limiting (429) from a genuinely unreachable server,
+        # and from a server-side error. Guessing "offline" here is what made a
+        # throttled second device look like it never reached the server.
+        if [ "$API_LAST_CODE" = "429" ]; then
+            api_error "$DEVICE_RATE_LIMITED"
+        elif [ "$API_LAST_CODE" = "000" ]; then
+            [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_HEALTH_FAIL" || print_error "$DEVICE_HEALTH_FAIL"
+            echo "========================================================="
+            echo ""
+        else
+            [ "$LANG_CODE" = "id" ] && print_error "$DEVICE_HEALTH_FAIL (HTTP $API_LAST_CODE)" || print_error "$DEVICE_HEALTH_FAIL (HTTP $API_LAST_CODE)"
+            echo "========================================================="
+            echo ""
+        fi
         return 1
     fi
 
@@ -896,7 +947,7 @@ dockerhub_login() {
     echo ""
 
     # 4. Poll until approved / rejected / expired / timeout
-    local waited=0 status=""
+    local waited=0 status="" warned_rate=0
     while [ "$waited" -lt "$INSTALL_POLL_TIMEOUT" ]; do
         printf "\r  ⏳ %s (%ds/%ds)   " "$DEVICE_WAITING" "$waited" "$INSTALL_POLL_TIMEOUT"
 
@@ -931,6 +982,12 @@ dockerhub_login() {
                     : # keep waiting
                     ;;
             esac
+        elif [ "$API_LAST_CODE" = "429" ] && [ "$warned_rate" -eq 0 ]; then
+            # One clear line instead of a silent stall: the user would otherwise
+            # just watch the counter run and never learn why nothing happens.
+            echo ""
+            [ "$LANG_CODE" = "id" ] && print_warning "$DEVICE_RATE_LIMITED" || print_warning "$DEVICE_RATE_LIMITED"
+            warned_rate=1
         fi
         sleep "$INSTALL_POLL_INTERVAL"
         waited=$((waited + INSTALL_POLL_INTERVAL))
