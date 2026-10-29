@@ -1662,7 +1662,7 @@ install_genieacs_panel() {
         && { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: Unlimited" || print_info "Memory limit: Unlimited"; } \
         || { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: ${MEMORY_LIMIT}M" || print_info "Memory limit: ${MEMORY_LIMIT}M"; }
 
-    IMAGE="solusidigitalnet/genieacspanelapi:V2.3.0"
+    IMAGE="solusidigitalnet/genieacspanelapi:V2.5.0"
 
     [ "$LANG_CODE" = "id" ] && loading_animation "📝 Memperbarui konfigurasi Docker Compose" || loading_animation "📝 Updating Docker Compose configuration"
 
@@ -1775,7 +1775,7 @@ update_genieacs_panel() {
         && { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: Unlimited" || print_info "Memory limit: Unlimited"; } \
         || { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: ${MEMORY_LIMIT}M" || print_info "Memory limit: ${MEMORY_LIMIT}M"; }
 
-    IMAGE="solusidigitalnet/genieacspanelapi:V2.3.0"
+    IMAGE="solusidigitalnet/genieacspanelapi:V2.5.0"
 
     [ "$LANG_CODE" = "id" ] && loading_animation "🛑 Menghentikan dan menghapus container lama" || loading_animation "🛑 Stopping and removing old container"
     docker stop genieacs-panel-api 2>/dev/null; docker rm genieacs-panel-api 2>/dev/null
@@ -1859,7 +1859,7 @@ uninstall_genieacs_panel() {
     docker stop genieacs-panel-api 2>/dev/null; docker rm genieacs-panel-api 2>/dev/null
 
     [ "$LANG_CODE" = "id" ] && loading_animation "🐳 Menghapus Docker image" || loading_animation "🐳 Removing Docker image"
-    docker rmi solusidigitalnet/genieacspanelapi:V2.3.0 2>&1 | grep -v "No such image" || true
+    docker rmi solusidigitalnet/genieacspanelapi:V2.5.0 2>&1 | grep -v "No such image" || true
 
     [ "$LANG_CODE" = "id" ] && loading_animation "📁 Menghapus folder & database GenieACS Panel" || loading_animation "📁 Removing GenieACS Panel folder & database"
     rm -rf /root/genieacspanel
