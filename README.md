@@ -201,7 +201,7 @@ pass : solusidigitalnet
 </td>
 <td>
 
-**Customer Portal** — `:1998`
+**Customer Portal Admin** — `:1998`
 ```
 user : superadmin
 pass : solusidigitalnet
