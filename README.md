@@ -102,10 +102,16 @@ Pilih menu (1-6):
                   Customer Portal
 
   [1] Install Customer Portal
-  [2] Uninstall Customer Portal
+  [2] Update Customer Portal
+  [3] Uninstall Customer Portal
   [0] Kembali
 
 ```
+
+> Customer Portal jalan sebagai container **standalone** (`solusidigitalnet/genieacspanelapi:customerportal-standalone`),
+> portal pelanggan + panel admin dalam satu aplikasi di port **1998** (`/` dan `/admin`).
+> Container tetap bisa menjangkau GenieACS di host lewat `extra_hosts: host.docker.internal:host-gateway`.
+> Data tersimpan di `/root/customerportal/db` (SQLite) dan `/root/customerportal/uploads` — aman saat update/install ulang.
 
 ---
 
@@ -116,7 +122,7 @@ Pilih menu (1-6):
 | 🐳 | **Docker** | Auto-install di awal bila belum ada · uninstall via menu |
 | 🚀 | **ACS Core** | Install, konfigurasi DB, atau uninstall |
 | 🖥️ | **ACS Panel** | Panel manajemen berbasis web |
-| 🌐 | **Customer Portal** | Portal pelanggan self-service |
+| 🌐 | **Customer Portal** | Portal pelanggan + admin standalone di `:1998` · install / update / uninstall |
 | 📊 | **Status** | Cek semua layanan sekaligus |
 
 ---
@@ -133,8 +139,11 @@ Pilih menu (1-6):
 │ ACS FS                  │  7567  │
 │ ACS Panel               │  1997  │
 │ Customer Portal         │  1998  │
+│ Customer Portal Admin   │  1998  │
 └─────────────────────────┴────────┘
 ```
+
+> Portal (`/`) dan Panel Admin (`/admin`) memakai port yang sama: **1998**.
 
 ---
 
@@ -192,14 +201,18 @@ pass : solusidigitalnet
 </td>
 <td>
 
-**ACS Portal** — `:1998`
+**Customer Portal** — `:1998`
 ```
-access code :
+user : superadmin
+pass : solusidigitalnet
 ```
 
 </td>
 </tr>
 </table>
+
+> Login panel admin di `http://<IP>:1998/admin`, portal pelanggan di `http://<IP>:1998`.
+> URL GenieACS, nama brand, dan logo **diatur dari halaman `/admin`** (tersimpan di database), bukan lewat file `.env`.
 
 > ⚠️ Ganti password setelah login pertama, jangan sampe lupa.
 
