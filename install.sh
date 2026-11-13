@@ -26,6 +26,15 @@ DB_URL="${GITHUB_RAW_BASE}/db"
 
 INSTALLER_VERSION="9"
 
+# ============================================================
+# CONFIGURATION - Customer Portal (standalone)
+# ============================================================
+# Nama folder & container sengaja dibuat sama supaya gampang dicari di server.
+CP_DIR_NAME="customerportal-standalone"
+CP_CONTAINER="customerportal-standalone"
+CP_IMAGE="solusidigitalnet/genieacspanelapi:customerportal-standalone"
+CP_PORT="1998"
+
 # Detect system language
 LANG_CODE="${LANG:0:2}"
 
@@ -1884,6 +1893,7 @@ uninstall_genieacs_panel() {
 # CUSTOMER PORTAL (Standalone)
 # Image : solusidigitalnet/genieacspanelapi:customerportal-standalone
 # Port  : 1998
+# Folder: /root/customerportal-standalone
 # Data  : ./db (portal.db + wal/shm) + ./uploads (logo) -> volume
 # Login : admin /admin  ·  pelanggan via kode akses / biometrik
 # ============================================================
@@ -1907,17 +1917,17 @@ install_customer_portal() {
 
     local IS_REINSTALL=false
 
-    if [ -d "customerportal" ]; then
+    if [ -d "$CP_DIR_NAME" ]; then
         # Folder sudah ada — database & logo dipertahankan, hanya config ditulis ulang.
         IS_REINSTALL=true
         if [ "$LANG_CODE" = "id" ]; then
-            print_info "Direktori customerportal sudah ada — database dipertahankan"
+            print_info "Direktori $CP_DIR_NAME sudah ada — database dipertahankan"
         else
-            print_info "customerportal directory already exists — database preserved"
+            print_info "$CP_DIR_NAME directory already exists — database preserved"
         fi
         [ "$LANG_CODE" = "id" ] && loading_animation "🗑️  Menghentikan container lama" || loading_animation "🗑️  Stopping existing container"
-        docker stop customerportal 2>/dev/null; docker rm customerportal 2>/dev/null
-        cd customerportal || return 1
+        docker stop "$CP_CONTAINER" 2>/dev/null; docker rm "$CP_CONTAINER" 2>/dev/null
+        cd "$CP_DIR_NAME" || return 1
         # Pertahankan JWT_SECRET agar sesi login yang aktif tidak putus
         EXISTING_JWT=$(grep -E 'JWT_SECRET=' docker-compose.yml 2>/dev/null | head -1 | sed -E 's/.*JWT_SECRET=([^[:space:]]*).*/\1/')
         if [ -n "$EXISTING_JWT" ]; then
@@ -1926,7 +1936,7 @@ install_customer_portal() {
             JWT_SECRET=$(openssl rand -hex 32)
         fi
     else
-        mkdir -p customerportal && cd customerportal || return 1
+        mkdir -p "$CP_DIR_NAME" && cd "$CP_DIR_NAME" || return 1
         JWT_SECRET=$(openssl rand -hex 32)
     fi
 
@@ -1935,7 +1945,7 @@ install_customer_portal() {
         && { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: Unlimited" || print_info "Memory limit: Unlimited"; } \
         || { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: ${MEMORY_LIMIT}M" || print_info "Memory limit: ${MEMORY_LIMIT}M"; }
 
-    IMAGE="solusidigitalnet/genieacspanelapi:customerportal-standalone"
+    IMAGE="$CP_IMAGE"
 
     [ "$LANG_CODE" = "id" ] && loading_animation "📝 Membuat konfigurasi Docker Compose" || loading_animation "📝 Creating Docker Compose configuration"
 
@@ -1954,17 +1964,17 @@ install_customer_portal() {
 
     cat > docker-compose.yml <<EOF
 services:
-  customerportal:
+  ${CP_CONTAINER}:
     image: ${IMAGE}
-    container_name: customerportal
+    container_name: ${CP_CONTAINER}
 ${DEPLOY_BLOCK}
     ports:
-      - "1998:1998"
+      - "${CP_PORT}:${CP_PORT}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       - NODE_ENV=production
-      - PORT=1998
+      - PORT=${CP_PORT}
       - JWT_SECRET=${JWT_SECRET}
       - DB_PATH=/data/db/portal.db
       - UPLOAD_DIR=/data/uploads
@@ -1991,7 +2001,7 @@ EOF
 
     [ "$LANG_CODE" = "id" ] && show_progress_bar 25 "⏳ Menunggu container siap..." || show_progress_bar 25 "⏳ Waiting for container to be ready..."
 
-    if docker ps | grep -q customerportal; then
+    if docker ps --format '{{.Names}}' | grep -qx "$CP_CONTAINER"; then
         SERVER_IP=$(get_server_ip)
         if [ "$IS_REINSTALL" = "true" ]; then
             [ "$LANG_CODE" = "id" ] && print_success "✅ Customer Portal berhasil diperbarui dan berjalan!" || print_success "✅ Customer Portal updated and running!"
@@ -2005,14 +2015,14 @@ EOF
             echo "║  🌐 Portal  : http://${SERVER_IP}:1998"
             echo "║  🌐 Admin   : http://${SERVER_IP}:1998/admin"
             echo "║  👤 Admin   : superadmin / solusidigitalnet"
-            echo "║  📁 Data    : /root/customerportal/db"
+            echo "║  📁 Data    : /root/${CP_DIR_NAME}/db"
             echo "╚══════════════════════════════════════════════════════════╝"
         fi
         [ "$LANG_CODE" = "id" ] && print_warning "Ganti password admin setelah login pertama (Panel Admin → Pengaturan)!" || print_warning "Change the admin password after first login (Admin Panel → Settings)!"
         return 0
     else
         [ "$LANG_CODE" = "id" ] && print_error "❌ Container gagal berjalan" || print_error "❌ Container failed to start"
-        docker ps -a; docker logs customerportal
+        docker ps -a; docker logs "$CP_CONTAINER"
         return 1
     fi
 }
@@ -2025,7 +2035,7 @@ update_customer_portal() {
     show_installation_header
     [ "$LANG_CODE" = "id" ] && animated_text "🔄 Memulai update Customer Portal..." 0.05 || animated_text "🔄 Starting Customer Portal update..." 0.05
 
-    if [ ! -d /root/customerportal ]; then
+    if [ ! -d "/root/$CP_DIR_NAME" ]; then
         [ "$LANG_CODE" = "id" ] && print_error "Customer Portal belum terinstall. Jalankan menu Install terlebih dahulu." || print_error "Customer Portal is not installed yet. Run Install first."
         return 1
     fi
@@ -2036,7 +2046,7 @@ update_customer_portal() {
 
     configure_firewall "1998/tcp"
 
-    cd /root/customerportal || return 1
+    cd "/root/$CP_DIR_NAME" || return 1
 
     EXISTING_JWT=$(grep -E 'JWT_SECRET=' docker-compose.yml 2>/dev/null | head -1 | sed -E 's/.*JWT_SECRET=([^[:space:]]*).*/\1/')
     if [ -n "$EXISTING_JWT" ]; then
@@ -2050,10 +2060,10 @@ update_customer_portal() {
         && { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: Unlimited" || print_info "Memory limit: Unlimited"; } \
         || { [ "$LANG_CODE" = "id" ] && print_info "Memory limit: ${MEMORY_LIMIT}M" || print_info "Memory limit: ${MEMORY_LIMIT}M"; }
 
-    IMAGE="solusidigitalnet/genieacspanelapi:customerportal-standalone"
+    IMAGE="$CP_IMAGE"
 
     [ "$LANG_CODE" = "id" ] && loading_animation "🛑 Menghentikan dan menghapus container lama" || loading_animation "🛑 Stopping and removing old container"
-    docker stop customerportal 2>/dev/null; docker rm customerportal 2>/dev/null
+    docker stop "$CP_CONTAINER" 2>/dev/null; docker rm "$CP_CONTAINER" 2>/dev/null
 
     [ "$LANG_CODE" = "id" ] && loading_animation "🐳 Menghapus image lama (force pull baru)" || loading_animation "🐳 Removing old image (force fresh pull)"
     docker rmi "$IMAGE" 2>&1 | grep -v "No such image" || true
@@ -2071,17 +2081,17 @@ update_customer_portal() {
 
     cat > docker-compose.yml <<EOF
 services:
-  customerportal:
+  ${CP_CONTAINER}:
     image: ${IMAGE}
-    container_name: customerportal
+    container_name: ${CP_CONTAINER}
 ${DEPLOY_BLOCK}
     ports:
-      - "1998:1998"
+      - "${CP_PORT}:${CP_PORT}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       - NODE_ENV=production
-      - PORT=1998
+      - PORT=${CP_PORT}
       - JWT_SECRET=${JWT_SECRET}
       - DB_PATH=/data/db/portal.db
       - UPLOAD_DIR=/data/uploads
@@ -2108,13 +2118,13 @@ EOF
 
     [ "$LANG_CODE" = "id" ] && show_progress_bar 25 "⏳ Menunggu container siap..." || show_progress_bar 25 "⏳ Waiting for container to be ready..."
 
-    if docker ps | grep -q customerportal; then
+    if docker ps --format '{{.Names}}' | grep -qx "$CP_CONTAINER"; then
         [ "$LANG_CODE" = "id" ] && print_success "✅ Customer Portal berhasil diperbarui dan berjalan!" || print_success "✅ Customer Portal updated and running!"
         [ "$LANG_CODE" = "id" ] && print_info "Portal tetap dapat diakses seperti sebelumnya (URL & login tidak berubah)." || print_info "Portal remains accessible as before (URL & login unchanged)."
         return 0
     else
         [ "$LANG_CODE" = "id" ] && print_error "❌ Container gagal berjalan" || print_error "❌ Container failed to start"
-        docker ps -a; docker logs customerportal
+        docker ps -a; docker logs "$CP_CONTAINER"
         return 1
     fi
 }
@@ -2131,13 +2141,13 @@ uninstall_customer_portal() {
     echo ""; echo "========================================================="; [ "$LANG_CODE" = "id" ] && animated_text "🗑️  Memulai proses uninstall Customer Portal..." 0.08 || animated_text "🗑️  Starting Customer Portal uninstall process..." 0.08; echo "========================================================="; echo ""
 
     [ "$LANG_CODE" = "id" ] && loading_animation "🛑 Menghentikan dan menghapus container" || loading_animation "🛑 Stopping and removing container"
-    docker stop customerportal 2>/dev/null; docker rm customerportal 2>/dev/null
+    docker stop "$CP_CONTAINER" 2>/dev/null; docker rm "$CP_CONTAINER" 2>/dev/null
 
     [ "$LANG_CODE" = "id" ] && loading_animation "🐳 Menghapus Docker image" || loading_animation "🐳 Removing Docker image"
-    docker rmi solusidigitalnet/genieacspanelapi:customerportal-standalone 2>&1 | grep -v "No such image" || true
+    docker rmi "$CP_IMAGE" 2>&1 | grep -v "No such image" || true
 
     [ "$LANG_CODE" = "id" ] && loading_animation "📁 Menghapus direktori & database Customer Portal" || loading_animation "📁 Removing Customer Portal folder & database"
-    rm -rf /root/customerportal
+    rm -rf "/root/$CP_DIR_NAME"
 
     if [ "$(check_ufw_status)" = "active" ]; then
         echo ""
@@ -2206,7 +2216,7 @@ show_status() {
 
         echo ""
 
-        if docker inspect customerportal >/dev/null 2>&1 && [ "$(docker inspect -f '{{.State.Running}}' customerportal 2>/dev/null)" = "true" ]; then
+        if docker inspect "$CP_CONTAINER" >/dev/null 2>&1 && [ "$(docker inspect -f '{{.State.Running}}' "$CP_CONTAINER" 2>/dev/null)" = "true" ]; then
             [ "$LANG_CODE" = "id" ] && print_success "✅ Customer Portal: Berjalan" || print_success "✅ Customer Portal: Running"
             echo "  🌐 URL Portal : http://${SERVER_IP}:1998"
             echo "  🌐 URL Admin  : http://${SERVER_IP}:1998/admin"

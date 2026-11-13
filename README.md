@@ -111,7 +111,7 @@ Pilih menu (1-6):
 > Customer Portal jalan sebagai container **standalone** (`solusidigitalnet/genieacspanelapi:customerportal-standalone`),
 > portal pelanggan + panel admin dalam satu aplikasi di port **1998** (`/` dan `/admin`).
 > Container tetap bisa menjangkau GenieACS di host lewat `extra_hosts: host.docker.internal:host-gateway`.
-> Data tersimpan di `/root/customerportal/db` (SQLite) dan `/root/customerportal/uploads` — aman saat update/install ulang.
+> Data tersimpan di `/root/customerportal-standalone/db` (SQLite) dan `/root/customerportal-standalone/uploads` — aman saat update/install ulang.
 
 ---
 
